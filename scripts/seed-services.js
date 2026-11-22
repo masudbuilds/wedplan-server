@@ -1,15 +1,15 @@
 import "dotenv/config";
-import { connectDB, getServicesCollection, closeDB } from "../src/config/db.js";
+import { connectDB, getServicesCollection, getUsersCollection, closeDB } from "../src/config/db.js";
+import { escapeRegex } from "../src/utils/regex.js";
 
 /**
  * Temporary Sample Data for WedPlan
  * Aligned with the 6 assignment categories and client mock data.
- * Placeholder vendorId is used; attachVendorDetails in the backend handles
- * missing vendors gracefully without throwing errors.
+ * Can be linked to a real registered vendor via:
+ * npm run seed -- vendor@example.com
  */
-const SAMPLE_SERVICES = [
+const BASE_SAMPLE_SERVICES = [
   {
-    vendorId: "placeholder-vendor-1",
     vendorName: "Julian & Co. Photography",
     vendorImage: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80",
     serviceName: "Editorial Wedding Photo & Cinema",
@@ -29,7 +29,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-01-10T09:00:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-2",
     vendorName: "Rosewood Glasshouse Estates",
     vendorImage: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80",
     serviceName: "Grand Conservatory & Botanical Gardens",
@@ -48,7 +47,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-01-14T11:30:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-3",
     vendorName: "Petal & Stem Floral Studio",
     vendorImage: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80",
     serviceName: "Romantic Bespoke Arches & Tablescapes",
@@ -67,7 +65,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-01-20T14:15:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-4",
     vendorName: "Artisan Feast Catering",
     vendorImage: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80",
     serviceName: "Farm-to-Table Multi-Course Wedding Banquet",
@@ -86,7 +83,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-02-02T10:00:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-5",
     vendorName: "Lumière Bridal Beauty",
     vendorImage: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=80",
     serviceName: "Luminous Bridal Glam & Hair Styling",
@@ -105,7 +101,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-02-05T13:45:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-6",
     vendorName: "Atelier Blanche Couture",
     vendorImage: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80",
     serviceName: "Custom Silk Bridal Gowns & Veil Styling",
@@ -124,7 +119,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-02-12T16:20:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-7",
     vendorName: "Evergreen Hilltop Pavilion",
     vendorImage: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80",
     serviceName: "Rustic Elegance Barn & Vineyard",
@@ -142,7 +136,6 @@ const SAMPLE_SERVICES = [
     createdAt: new Date("2026-02-15T08:30:00Z"),
   },
   {
-    vendorId: "placeholder-vendor-8",
     vendorName: "Serenade Acoustic Strings",
     vendorImage: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=200&q=80",
     serviceName: "Classical String Quartet & Cocktail Trio",
@@ -165,19 +158,65 @@ async function seedServices() {
     console.log("Connecting to database...");
     await connectDB();
     const servicesCollection = getServicesCollection();
+    const usersCollection = getUsersCollection();
 
-    // Remove any previously seeded sample data to avoid duplicates
+    // Check if an optional vendor email was provided as an argument
+    const emailArg = process.argv[2];
+    let matchedVendor = null;
+
+    if (emailArg && emailArg.trim()) {
+      const email = emailArg.trim();
+      matchedVendor = await usersCollection.findOne({
+        email: { $regex: `^${escapeRegex(email)}$`, $options: "i" },
+      });
+
+      if (matchedVendor) {
+        console.log(`Found registered vendor account: "${matchedVendor.email}" (ID: ${matchedVendor._id})`);
+        console.log("Attaching all sample services to this vendor.");
+      } else {
+        console.warn(`Warning: Vendor with email "${email}" was not found in database.`);
+        console.log("Proceeding with placeholder vendor IDs.");
+      }
+    } else {
+      console.log("No vendor email argument passed (run: npm run seed -- vendor@example.com).");
+      console.log("Using placeholder vendor IDs for sample services.");
+    }
+
+    // Clean up previous sample data
     const deleteResult = await servicesCollection.deleteMany({ isSeedData: true });
     if (deleteResult.deletedCount > 0) {
       console.log(`Cleaned up ${deleteResult.deletedCount} existing sample seed records.`);
     }
 
-    // Insert 8 sample services
-    const insertResult = await servicesCollection.insertMany(SAMPLE_SERVICES);
+    // Prepare services with real vendor ID or numbered placeholder
+    const servicesToInsert = BASE_SAMPLE_SERVICES.map((s, index) => {
+      const vendorId = matchedVendor
+        ? matchedVendor._id.toString()
+        : `placeholder-vendor-${index + 1}`;
+
+      const vendorName = matchedVendor
+        ? matchedVendor.businessName || matchedVendor.name || s.vendorName
+        : s.vendorName;
+
+      const vendorImage = matchedVendor
+        ? matchedVendor.image || s.vendorImage
+        : s.vendorImage;
+
+      return {
+        ...s,
+        vendorId,
+        vendorName,
+        vendorImage,
+      };
+    });
+
+    const insertResult = await servicesCollection.insertMany(servicesToInsert);
     console.log("--------------------------------------------------");
     console.log(`SUCCESS: Inserted ${insertResult.insertedCount} sample approved services.`);
-    console.log("Note: These are temporary sample records. When real vendors register,");
-    console.log("their created services will link to actual vendor accounts.");
+    if (matchedVendor) {
+      console.log(`All services are assigned to vendor: ${matchedVendor.email}`);
+    }
+    console.log("Marked with { isSeedData: true } as temporary sample records.");
     console.log("--------------------------------------------------");
   } catch (error) {
     console.error("Failed to seed services:", error.message);
