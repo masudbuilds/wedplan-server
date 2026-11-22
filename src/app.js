@@ -14,6 +14,7 @@ import adminStatsRoutes from "./routes/admin-stats.js";
 import adminUsersRoutes from "./routes/admin-users.js";
 import adminServicesRoutes from "./routes/admin-services.js";
 import adminTransactionsRoutes from "./routes/admin-transactions.js";
+import webhooksRoutes from "./routes/webhooks.js";
 
 const app = express();
 
@@ -25,7 +26,7 @@ const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl) or matching clientUrl
+      // Allow requests with no origin (like mobile apps, Stripe, or curl) or matching clientUrl
       if (!origin || origin === clientUrl) {
         callback(null, true);
       } else {
@@ -33,19 +34,20 @@ app.use(
       }
     },
     credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "stripe-signature"],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   })
 );
 
-// JSON body parsing with raw body preserved for Stripe webhook verification later
+// 1. Stripe webhook route mounted BEFORE express.json() with raw body parsing
 app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  })
+  "/api/webhooks",
+  express.raw({ type: "application/json" }),
+  webhooksRoutes
 );
+
+// 2. General JSON body parsing for all other routes
+app.use(express.json());
 
 // Mount public routes
 app.use("/api/health", healthRoutes);

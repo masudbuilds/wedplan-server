@@ -62,8 +62,14 @@ async function createIndexes() {
     );
 
     const transactions = db.collection("transactions");
+    // Unique sparse index on Stripe Checkout session ID (idempotent payment recording)
     await transactions.createIndex(
       { stripeSessionId: 1 },
+      { unique: true, sparse: true }
+    );
+    // Unique sparse index on Stripe Invoice ID (idempotent subscription renewal recording)
+    await transactions.createIndex(
+      { stripeInvoiceId: 1 },
       { unique: true, sparse: true }
     );
     await transactions.createIndex({ vendorId: 1 });
