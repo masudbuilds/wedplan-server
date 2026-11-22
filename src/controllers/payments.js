@@ -196,3 +196,51 @@ export async function cancelSubscription(req, res, next) {
     next(error);
   }
 }
+
+/**
+ * GET /api/vendor/subscription
+ * Role: vendor
+ * Returns the vendor's current subscription details, active premium status,
+ * cancellation state, and past payment transactions.
+ */
+export async function getVendorSubscription(req, res, next) {
+  try {
+    const usersCollection = getUsersCollection();
+    const vendor = await usersCollection.findOne({
+      $or: [
+        { _id: req.user.id },
+        { id: req.user.id },
+        ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+      ],
+    });
+
+    const transactionsCollection = getTransactionsCollection();
+    const rawTransactions = await transactionsCollection
+      .find({ vendorId: req.user.id })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const transactions = rawTransactions.map((t) => ({
+      id: t._id.toString(),
+      _id: t._id,
+      plan: t.plan,
+      amount: t.amount,
+      currency: t.currency,
+      status: t.status,
+      stripeSessionId: t.stripeSessionId || null,
+      stripeInvoiceId: t.stripeInvoiceId || null,
+      createdAt: t.createdAt,
+    }));
+
+    res.json({
+      success: true,
+      plan: vendor?.subscriptionPlan || "free",
+      isPremium: isPremium(vendor),
+      subscriptionExpiresAt: vendor?.subscriptionExpiresAt || null,
+      cancelAtPeriodEnd: Boolean(vendor?.cancelAtPeriodEnd),
+      transactions,
+    });
+  } catch (error) {
+    next(error);
+  }
+}

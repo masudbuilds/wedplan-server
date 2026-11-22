@@ -10,11 +10,15 @@ import {
   toggleServiceAvailability,
   deleteService,
 } from "../controllers/vendor-services.js";
+import { getVendorSubscription } from "../controllers/payments.js";
 
 const router = Router();
 
 // Protect all vendor service routes
 router.use(verifyToken, requireRole(USER_ROLES.VENDOR));
+
+// GET /api/vendor/subscription - vendor subscription status & transactions
+router.get("/subscription", getVendorSubscription);
 
 // POST /api/vendor/services - create new service
 router.post("/services", createService);
