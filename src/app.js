@@ -9,6 +9,7 @@ import authRoutes from "./routes/auth.js";
 import vendorServicesRoutes from "./routes/vendor-services.js";
 import vendorBookingsRoutes from "./routes/vendor-bookings.js";
 import bookingsRoutes from "./routes/bookings.js";
+import statsRoutes from "./routes/stats.js";
 
 const app = express();
 
@@ -49,6 +50,9 @@ app.use("/api/services", servicesRoutes);
 
 // Mount auth routes (protected)
 app.use("/api", authRoutes);
+
+// Mount stats routes (vendor & customer dashboards)
+app.use("/api", statsRoutes);
 
 // Mount vendor routes (protected)
 app.use("/api/vendor", vendorServicesRoutes);
