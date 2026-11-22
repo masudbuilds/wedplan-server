@@ -2,9 +2,10 @@ import { ObjectId } from "mongodb";
 import { getStripe } from "../config/stripe.js";
 import {
   getUsersCollection,
+  getServicesCollection,
   getTransactionsCollection,
 } from "../config/db.js";
-import { USER_ROLES, TRANSACTION_STATUS } from "../utils/constants.js";
+import { USER_ROLES, SERVICE_STATUS, TRANSACTION_STATUS } from "../utils/constants.js";
 
 /**
  * Helper to safely extract subscription current_period_end.
@@ -25,7 +26,35 @@ export function getSubscriptionPeriodEnd(subscription) {
 }
 
 /**
- * Handles checkout.session.completed
+ * Helper to find a vendor by vendorId or stripeSubscriptionId
+ */
+async function findVendorForSubscription(vendorId, stripeSubId) {
+  const usersCollection = getUsersCollection();
+
+  if (vendorId) {
+    const byId = await usersCollection.findOne({
+      $or: [
+        { _id: vendorId },
+        { id: vendorId },
+        ...(ObjectId.isValid(vendorId) ? [{ _id: new ObjectId(vendorId) }] : []),
+      ],
+    });
+    if (byId && byId.role === USER_ROLES.VENDOR) return byId;
+  }
+
+  if (stripeSubId) {
+    const bySub = await usersCollection.findOne({
+      stripeSubscriptionId: stripeSubId,
+      role: USER_ROLES.VENDOR,
+    });
+    if (bySub) return bySub;
+  }
+
+  return null;
+}
+
+/**
+ * 1. Handles checkout.session.completed
  * Activates vendor Premium plan and idempotently creates a completed transaction.
  */
 async function handleCheckoutSessionCompleted(session) {
@@ -34,35 +63,18 @@ async function handleCheckoutSessionCompleted(session) {
   }
 
   const vendorId = session.metadata?.vendorId || session.client_reference_id;
-  if (!vendorId) {
-    console.warn("Notice: checkout.session.completed received without vendorId.");
-    return;
-  }
-
-  const usersCollection = getUsersCollection();
-  const transactionsCollection = getTransactionsCollection();
-
-  // Confirm vendor exists in DB and has role 'vendor'
-  const vendor = await usersCollection.findOne({
-    $or: [
-      { _id: vendorId },
-      { id: vendorId },
-      ...(ObjectId.isValid(vendorId) ? [{ _id: new ObjectId(vendorId) }] : []),
-    ],
-  });
-
-  if (!vendor || vendor.role !== USER_ROLES.VENDOR) {
-    console.warn(`Notice: Vendor record not found or invalid role for ID: ${vendorId}`);
-    return;
-  }
-
-  // Retrieve subscription from Stripe to obtain accurate period end
-  let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const stripeSubId =
     typeof session.subscription === "string"
       ? session.subscription
       : session.subscription?.id;
 
+  const vendor = await findVendorForSubscription(vendorId, stripeSubId);
+  if (!vendor) {
+    console.warn("Notice: checkout.session.completed - Vendor not found:", vendorId);
+    return;
+  }
+
+  let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   if (stripeSubId) {
     try {
       const stripe = getStripe();
@@ -73,7 +85,9 @@ async function handleCheckoutSessionCompleted(session) {
     }
   }
 
-  // Update vendor subscription status in database
+  const usersCollection = getUsersCollection();
+  const transactionsCollection = getTransactionsCollection();
+
   await usersCollection.updateOne(
     { _id: vendor._id },
     {
@@ -81,12 +95,12 @@ async function handleCheckoutSessionCompleted(session) {
         subscriptionPlan: "premium",
         subscriptionExpiresAt: periodEnd,
         stripeSubscriptionId: stripeSubId || null,
+        cancelAtPeriodEnd: false,
         updatedAt: new Date(),
       },
     }
   );
 
-  // Idempotently record the transaction (duplicate key 11000 handled gracefully)
   try {
     const existing = await transactionsCollection.findOne({
       stripeSessionId: session.id,
@@ -109,6 +123,196 @@ async function handleCheckoutSessionCompleted(session) {
       console.warn("Notice: Transaction recording error:", txErr.message);
     }
   }
+}
+
+/**
+ * 2. Handles invoice.paid (subscription renewals)
+ * Extends subscription period and records renewal transaction.
+ */
+async function handleInvoicePaid(invoice) {
+  const stripeSubId =
+    typeof invoice.subscription === "string"
+      ? invoice.subscription
+      : invoice.subscription?.id;
+
+  // Only handle subscription renewals and recurring cycles
+  if (!stripeSubId) return;
+
+  const vendorId =
+    invoice.subscription_details?.metadata?.vendorId ||
+    invoice.metadata?.vendorId;
+
+  const vendor = await findVendorForSubscription(vendorId, stripeSubId);
+  if (!vendor) {
+    console.warn("Notice: invoice.paid - Vendor not found for subscription:", stripeSubId);
+    return;
+  }
+
+  // Determine period end from subscription or invoice line item
+  let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  try {
+    const stripe = getStripe();
+    const subscription = await stripe.subscriptions.retrieve(stripeSubId);
+    periodEnd = getSubscriptionPeriodEnd(subscription);
+  } catch (err) {
+    const lineEnd = invoice.lines?.data?.[0]?.period?.end;
+    if (lineEnd) periodEnd = new Date(lineEnd * 1000);
+  }
+
+  const usersCollection = getUsersCollection();
+  const transactionsCollection = getTransactionsCollection();
+
+  // Extend vendor subscription
+  await usersCollection.updateOne(
+    { _id: vendor._id },
+    {
+      $set: {
+        subscriptionPlan: "premium",
+        subscriptionExpiresAt: periodEnd,
+        stripeSubscriptionId: stripeSubId,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  // Idempotently record invoice payment transaction
+  try {
+    const existing = await transactionsCollection.findOne({
+      stripeInvoiceId: invoice.id,
+    });
+
+    if (!existing) {
+      await transactionsCollection.insertOne({
+        vendorId: vendor._id.toString(),
+        plan: "premium",
+        amount: (invoice.amount_paid || 0) / 100,
+        currency: invoice.currency || "usd",
+        stripeInvoiceId: invoice.id,
+        stripeSubscriptionId: stripeSubId,
+        status: TRANSACTION_STATUS.COMPLETED,
+        createdAt: new Date(),
+      });
+    }
+  } catch (txErr) {
+    if (txErr.code !== 11000) {
+      console.warn("Notice: Renewal transaction error:", txErr.message);
+    }
+  }
+}
+
+/**
+ * 3. Handles invoice.payment_failed
+ * Records a failed transaction record without extending subscription.
+ */
+async function handleInvoicePaymentFailed(invoice) {
+  const stripeSubId =
+    typeof invoice.subscription === "string"
+      ? invoice.subscription
+      : invoice.subscription?.id;
+
+  if (!stripeSubId) return;
+
+  const vendorId =
+    invoice.subscription_details?.metadata?.vendorId ||
+    invoice.metadata?.vendorId;
+
+  const vendor = await findVendorForSubscription(vendorId, stripeSubId);
+  if (!vendor) return;
+
+  const transactionsCollection = getTransactionsCollection();
+
+  try {
+    const existing = await transactionsCollection.findOne({
+      stripeInvoiceId: invoice.id,
+    });
+
+    if (!existing) {
+      await transactionsCollection.insertOne({
+        vendorId: vendor._id.toString(),
+        plan: "premium",
+        amount: (invoice.amount_due || 0) / 100,
+        currency: invoice.currency || "usd",
+        stripeInvoiceId: invoice.id,
+        stripeSubscriptionId: stripeSubId,
+        status: TRANSACTION_STATUS.FAILED,
+        createdAt: new Date(),
+      });
+    }
+  } catch (txErr) {
+    if (txErr.code !== 11000) {
+      console.warn("Notice: Failed payment record error:", txErr.message);
+    }
+  }
+}
+
+/**
+ * 4. Handles customer.subscription.deleted
+ * Downgrades vendor to "free", clears subscriptionExpiresAt, and keeps
+ * vendor's 3 newest non-rejected services active while deactivating the rest.
+ */
+async function handleSubscriptionDeleted(subscription) {
+  const vendorId = subscription.metadata?.vendorId;
+  const vendor = await findVendorForSubscription(vendorId, subscription.id);
+  if (!vendor) return;
+
+  const usersCollection = getUsersCollection();
+  const servicesCollection = getServicesCollection();
+
+  // Reset to free plan
+  await usersCollection.updateOne(
+    { _id: vendor._id },
+    {
+      $set: {
+        subscriptionPlan: "free",
+        subscriptionExpiresAt: null,
+        cancelAtPeriodEnd: false,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  // Enforce free tier service limit: keep 3 newest non-rejected services active, deactivate the rest
+  const vendorServices = await servicesCollection
+    .find({
+      vendorId: vendor._id.toString(),
+      status: { $ne: SERVICE_STATUS.REJECTED },
+    })
+    .sort({ createdAt: -1 })
+    .toArray();
+
+  if (vendorServices.length > 3) {
+    const servicesToDeactivate = vendorServices.slice(3);
+    const idsToDeactivate = servicesToDeactivate.map((s) => s._id);
+
+    await servicesCollection.updateMany(
+      { _id: { $in: idsToDeactivate } },
+      { $set: { isActive: false, updatedAt: new Date() } }
+    );
+  }
+}
+
+/**
+ * 5. Handles customer.subscription.updated
+ * Synchronizes cancel_at_period_end or current_period_end changes.
+ */
+async function handleSubscriptionUpdated(subscription) {
+  const vendorId = subscription.metadata?.vendorId;
+  const vendor = await findVendorForSubscription(vendorId, subscription.id);
+  if (!vendor) return;
+
+  const periodEnd = getSubscriptionPeriodEnd(subscription);
+  const usersCollection = getUsersCollection();
+
+  await usersCollection.updateOne(
+    { _id: vendor._id },
+    {
+      $set: {
+        subscriptionExpiresAt: periodEnd,
+        cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+        updatedAt: new Date(),
+      },
+    }
+  );
 }
 
 /**
@@ -142,6 +346,22 @@ export async function handleStripeWebhook(req, res, next) {
     switch (event.type) {
       case "checkout.session.completed":
         await handleCheckoutSessionCompleted(event.data.object);
+        break;
+
+      case "invoice.paid":
+        await handleInvoicePaid(event.data.object);
+        break;
+
+      case "invoice.payment_failed":
+        await handleInvoicePaymentFailed(event.data.object);
+        break;
+
+      case "customer.subscription.deleted":
+        await handleSubscriptionDeleted(event.data.object);
+        break;
+
+      case "customer.subscription.updated":
+        await handleSubscriptionUpdated(event.data.object);
         break;
 
       default:
