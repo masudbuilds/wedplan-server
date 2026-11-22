@@ -66,3 +66,167 @@ export async function createService(req, res, next) {
     next(error);
   }
 }
+
+/**
+ * GET /api/vendor/services
+ * Role: vendor
+ * Returns all services belonging to the logged-in vendor (all approval statuses), newest first.
+ */
+export async function getMyServices(req, res, next) {
+  try {
+    const servicesCollection = getServicesCollection();
+    const services = await servicesCollection
+      .find({ vendorId: req.user.id })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json({
+      success: true,
+      count: services.length,
+      services: services.map((s) => ({
+        ...s,
+        id: s._id.toString(),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/vendor/services/:id
+ * Role: vendor
+ * Returns a single service owned by the logged-in vendor.
+ */
+export async function getMyServiceById(req, res, next) {
+  try {
+    const { id } = req.params;
+    const servicesCollection = getServicesCollection();
+    const service = await servicesCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    if (service.vendorId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not own this service",
+      });
+    }
+
+    res.json({
+      success: true,
+      service: {
+        ...service,
+        id: service._id.toString(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PATCH /api/vendor/services/:id
+ * Role: vendor
+ * Updates editable service fields. Protects vendorId, status, and createdAt from modification.
+ */
+export async function updateService(req, res, next) {
+  try {
+    const { id } = req.params;
+    const validation = validateServiceInput(req.body, true);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+      });
+    }
+
+    const servicesCollection = getServicesCollection();
+    const service = await servicesCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    if (service.vendorId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not own this service",
+      });
+    }
+
+    const updates = {};
+    const { serviceName, category, description, price, location, images } = req.body;
+
+    if (serviceName !== undefined) updates.serviceName = serviceName.trim();
+    if (category !== undefined) updates.category = category.trim();
+    if (description !== undefined) updates.description = description.trim();
+    if (price !== undefined) updates.price = Number(price);
+    if (location !== undefined) updates.location = location.trim();
+    if (images !== undefined) updates.images = images.map((img) => img.trim());
+
+    updates.updatedAt = new Date();
+
+    await servicesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updates }
+    );
+
+    const updated = await servicesCollection.findOne({ _id: new ObjectId(id) });
+
+    res.json({
+      success: true,
+      message: "Service updated successfully",
+      service: {
+        ...updated,
+        id: updated._id.toString(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /api/vendor/services/:id
+ * Role: vendor
+ * Deletes a service owned by the logged-in vendor.
+ */
+export async function deleteService(req, res, next) {
+  try {
+    const { id } = req.params;
+    const servicesCollection = getServicesCollection();
+    const service = await servicesCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    if (service.vendorId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not own this service",
+      });
+    }
+
+    await servicesCollection.deleteOne({ _id: new ObjectId(id) });
+
+    res.json({
+      success: true,
+      message: "Service deleted successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+}
