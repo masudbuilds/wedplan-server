@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import {
+  getDb,
   getUsersCollection,
   getServicesCollection,
   getBookingsCollection,
@@ -130,6 +131,126 @@ export async function getAdminUserById(req, res, next) {
         serviceCount,
         bookingCount,
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PATCH /api/admin/users/:id/block
+ * Role: admin
+ * Blocks a user. Protects admins from blocking themselves or other admins.
+ * Deletes user sessions to log them out immediately.
+ */
+export async function blockUser(req, res, next) {
+  try {
+    const { id } = req.params;
+    const targetUser = await findUserById(id);
+
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: `User not found: ${id}`,
+      });
+    }
+
+    const targetUserIdStr = targetUser._id ? targetUser._id.toString() : targetUser.id;
+
+    // Rule 1: Admin cannot block themselves
+    if (targetUserIdStr === req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Action not allowed: Administrators cannot block their own account.",
+      });
+    }
+
+    // Rule 2: Admin cannot block another admin
+    if (targetUser.role === USER_ROLES.ADMIN) {
+      return res.status(403).json({
+        success: false,
+        message: "Action not allowed: Administrators cannot block another administrator account.",
+      });
+    }
+
+    // Rule 3: User is already blocked
+    if (targetUser.isBlocked) {
+      return res.status(409).json({
+        success: false,
+        message: "User is already blocked.",
+      });
+    }
+
+    const usersCollection = getUsersCollection();
+    await usersCollection.updateOne(
+      { _id: targetUser._id },
+      { $set: { isBlocked: true, updatedAt: new Date() } }
+    );
+
+    // Invalidate any active Better Auth sessions for this user
+    try {
+      const db = getDb();
+      await Promise.all([
+        db.collection("session").deleteMany({
+          $or: [{ userId: targetUserIdStr }, { userId: targetUser._id }],
+        }),
+        db.collection("sessions").deleteMany({
+          $or: [{ userId: targetUserIdStr }, { userId: targetUser._id }],
+        }),
+      ]);
+    } catch (sessionErr) {
+      console.warn("Notice: Session cleanup warning:", sessionErr.message);
+    }
+
+    const updatedUser = await findUserById(id);
+
+    res.json({
+      success: true,
+      message: `User "${targetUser.name || targetUser.email}" has been blocked successfully.`,
+      user: formatSafeUser(updatedUser),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PATCH /api/admin/users/:id/unblock
+ * Role: admin
+ * Unblocks a previously blocked user.
+ */
+export async function unblockUser(req, res, next) {
+  try {
+    const { id } = req.params;
+    const targetUser = await findUserById(id);
+
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: `User not found: ${id}`,
+      });
+    }
+
+    // Rule: User is not blocked
+    if (!targetUser.isBlocked) {
+      return res.status(409).json({
+        success: false,
+        message: "User is not currently blocked.",
+      });
+    }
+
+    const usersCollection = getUsersCollection();
+    await usersCollection.updateOne(
+      { _id: targetUser._id },
+      { $set: { isBlocked: false, updatedAt: new Date() } }
+    );
+
+    const updatedUser = await findUserById(id);
+
+    res.json({
+      success: true,
+      message: `User "${targetUser.name || targetUser.email}" has been unblocked successfully.`,
+      user: formatSafeUser(updatedUser),
     });
   } catch (error) {
     next(error);
