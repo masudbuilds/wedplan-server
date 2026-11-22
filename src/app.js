@@ -5,6 +5,7 @@ import { notFound, errorHandler } from "./middleware/error.js";
 import healthRoutes from "./routes/health.js";
 import categoriesRoutes from "./routes/categories.js";
 import servicesRoutes from "./routes/services.js";
+import authRoutes from "./routes/auth.js";
 
 const app = express();
 
@@ -42,6 +43,9 @@ app.use(
 app.use("/api/health", healthRoutes);
 app.use("/api/categories", categoriesRoutes);
 app.use("/api/services", servicesRoutes);
+
+// Mount auth routes (protected)
+app.use("/api", authRoutes);
 
 // Central 404 and Error handling middleware
 app.use(notFound);
