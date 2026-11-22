@@ -4,6 +4,7 @@ import helmet from "helmet";
 import { notFound, errorHandler } from "./middleware/error.js";
 import healthRoutes from "./routes/health.js";
 import categoriesRoutes from "./routes/categories.js";
+import servicesRoutes from "./routes/services.js";
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use(
 // Mount public routes
 app.use("/api/health", healthRoutes);
 app.use("/api/categories", categoriesRoutes);
+app.use("/api/services", servicesRoutes);
 
 // Central 404 and Error handling middleware
 app.use(notFound);
