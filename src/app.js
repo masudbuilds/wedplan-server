@@ -10,6 +10,7 @@ import vendorServicesRoutes from "./routes/vendor-services.js";
 import vendorBookingsRoutes from "./routes/vendor-bookings.js";
 import bookingsRoutes from "./routes/bookings.js";
 import statsRoutes from "./routes/stats.js";
+import adminStatsRoutes from "./routes/admin-stats.js";
 
 const app = express();
 
@@ -60,6 +61,9 @@ app.use("/api/vendor", vendorBookingsRoutes);
 
 // Mount booking routes (protected)
 app.use("/api/bookings", bookingsRoutes);
+
+// Mount admin routes (protected)
+app.use("/api/admin", adminStatsRoutes);
 
 // Central 404 and Error handling middleware
 app.use(notFound);
