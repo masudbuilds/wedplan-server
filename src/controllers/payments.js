@@ -1,7 +1,8 @@
 import { ObjectId } from "mongodb";
 import { getStripe } from "../config/stripe.js";
-import { getUsersCollection } from "../config/db.js";
+import { getUsersCollection, getTransactionsCollection } from "../config/db.js";
 import { isPremium } from "../utils/subscription.js";
+import { getSubscriptionPeriodEnd } from "./webhooks.js";
 
 /**
  * POST /api/payments/create-checkout-session
@@ -119,6 +120,77 @@ export async function getSessionStatus(req, res, next) {
       paymentStatus: session.payment_status,
       isPremium: isPremium(currentUser),
       subscriptionExpiresAt: currentUser?.subscriptionExpiresAt || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/payments/cancel-subscription
+ * Role: vendor
+ * Schedules subscription cancellation at the end of the billing period.
+ * Premium status remains active until the expiration date.
+ */
+export async function cancelSubscription(req, res, next) {
+  try {
+    const usersCollection = getUsersCollection();
+    const vendor = await usersCollection.findOne({
+      $or: [
+        { _id: req.user.id },
+        { id: req.user.id },
+        ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+      ],
+    });
+
+    if (!vendor || !isPremium(vendor)) {
+      return res.status(404).json({
+        success: false,
+        message: "No active Premium subscription found to cancel.",
+      });
+    }
+
+    const transactionsCollection = getTransactionsCollection();
+    let stripeSubId = vendor.stripeSubscriptionId;
+
+    if (!stripeSubId) {
+      const latestTx = await transactionsCollection.findOne(
+        { vendorId: req.user.id, stripeSubscriptionId: { $ne: null } },
+        { sort: { createdAt: -1 } }
+      );
+      stripeSubId = latestTx?.stripeSubscriptionId;
+    }
+
+    if (!stripeSubId) {
+      return res.status(404).json({
+        success: false,
+        message: "Active subscription identifier not found in records.",
+      });
+    }
+
+    const stripe = getStripe();
+    const updatedSub = await stripe.subscriptions.update(stripeSubId, {
+      cancel_at_period_end: true,
+    });
+
+    const periodEnd = getSubscriptionPeriodEnd(updatedSub);
+
+    await usersCollection.updateOne(
+      { _id: vendor._id },
+      {
+        $set: {
+          cancelAtPeriodEnd: true,
+          subscriptionExpiresAt: periodEnd,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    res.json({
+      success: true,
+      message: "Subscription scheduled to cancel at the end of the current billing period. Premium access remains active until expiration.",
+      subscriptionExpiresAt: periodEnd,
+      cancelAtPeriodEnd: true,
     });
   } catch (error) {
     next(error);

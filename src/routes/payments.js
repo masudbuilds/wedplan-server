@@ -4,6 +4,7 @@ import { USER_ROLES } from "../utils/constants.js";
 import {
   createCheckoutSession,
   getSessionStatus,
+  cancelSubscription,
 } from "../controllers/payments.js";
 
 const router = Router();
@@ -16,5 +17,8 @@ router.post("/create-checkout-session", createCheckoutSession);
 
 // GET /api/payments/session-status - check payment and DB premium status
 router.get("/session-status", getSessionStatus);
+
+// POST /api/payments/cancel-subscription - cancel at period end
+router.post("/cancel-subscription", cancelSubscription);
 
 export default router;
