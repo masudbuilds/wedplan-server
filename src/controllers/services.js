@@ -2,6 +2,7 @@ import { ObjectId } from "mongodb";
 import { getServicesCollection, getUsersCollection } from "../config/db.js";
 import { SERVICE_STATUS } from "../utils/constants.js";
 import { escapeRegex } from "../utils/regex.js";
+import { isValidObjectId } from "../utils/object-id.js";
 
 /**
  * Attaches sanitized vendor details to service documents.
@@ -150,6 +151,74 @@ export async function getServices(req, res, next) {
       page,
       limit,
       services,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/services/featured
+ * Public route: returns the latest 6 approved and active services for the homepage banner/sections.
+ */
+export async function getFeaturedServices(req, res, next) {
+  try {
+    const servicesCollection = getServicesCollection();
+    const rawServices = await servicesCollection
+      .find({
+        status: SERVICE_STATUS.APPROVED,
+        isActive: true,
+      })
+      .sort({ createdAt: -1 })
+      .limit(6)
+      .toArray();
+
+    const services = await attachVendorDetails(rawServices);
+
+    res.json({
+      success: true,
+      services,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/services/:id
+ * Public route: returns a single approved and active service with sanitized vendor info.
+ * Returns 400 for invalid ID format, 404 if missing or not approved/active.
+ */
+export async function getServiceById(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid service ID: ${id}`,
+      });
+    }
+
+    const servicesCollection = getServicesCollection();
+    const service = await servicesCollection.findOne({
+      _id: new ObjectId(id),
+      status: SERVICE_STATUS.APPROVED,
+      isActive: true,
+    });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found or not currently active/approved",
+      });
+    }
+
+    const [serviceWithVendor] = await attachVendorDetails([service]);
+
+    res.json({
+      success: true,
+      service: serviceWithVendor,
     });
   } catch (error) {
     next(error);
