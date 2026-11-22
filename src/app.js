@@ -15,6 +15,7 @@ import adminUsersRoutes from "./routes/admin-users.js";
 import adminServicesRoutes from "./routes/admin-services.js";
 import adminTransactionsRoutes from "./routes/admin-transactions.js";
 import webhooksRoutes from "./routes/webhooks.js";
+import paymentsRoutes from "./routes/payments.js";
 
 const app = express();
 
@@ -59,6 +60,9 @@ app.use("/api", authRoutes);
 
 // Mount stats routes (vendor & customer dashboards)
 app.use("/api", statsRoutes);
+
+// Mount payment routes (vendor subscription checkout)
+app.use("/api/payments", paymentsRoutes);
 
 // Mount vendor routes (protected)
 app.use("/api/vendor", vendorServicesRoutes);
