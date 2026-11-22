@@ -13,6 +13,7 @@ import statsRoutes from "./routes/stats.js";
 import adminStatsRoutes from "./routes/admin-stats.js";
 import adminUsersRoutes from "./routes/admin-users.js";
 import adminServicesRoutes from "./routes/admin-services.js";
+import adminTransactionsRoutes from "./routes/admin-transactions.js";
 
 const app = express();
 
@@ -68,6 +69,7 @@ app.use("/api/bookings", bookingsRoutes);
 app.use("/api/admin", adminStatsRoutes);
 app.use("/api/admin", adminUsersRoutes);
 app.use("/api/admin", adminServicesRoutes);
+app.use("/api/admin", adminTransactionsRoutes);
 
 // Central 404 and Error handling middleware
 app.use(notFound);
