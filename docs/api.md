@@ -45,6 +45,19 @@ Local Development: `http://localhost:5000/api`
 | `PATCH` | `/api/vendor/services/:id` | Vendor | Update editable service details |
 | `PATCH` | `/api/vendor/services/:id/availability` | Vendor | Toggle availability (`isActive`: boolean) |
 | `DELETE` | `/api/vendor/services/:id` | Vendor | Delete own service |
+| `GET` | `/api/vendor/subscription` | Vendor | View subscription status, expiry, and payment history |
+
+### Stripe Payments & Subscriptions (`/api/payments`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/payments/create-checkout-session` | Vendor | Generate Stripe Checkout session for Premium upgrade |
+| `GET` | `/api/payments/session-status` | Vendor | Query session payment status and DB premium state |
+| `POST` | `/api/payments/cancel-subscription` | Vendor | Cancel subscription at period end (retains access until expiry) |
+
+### Stripe Webhook (`/api/webhooks`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/webhooks/stripe` | Stripe Webhook | Raw body endpoint verifying Stripe signature to activate/renew/cancel premium |
 
 ### Customer Bookings (`/api/bookings`)
 | Method | Endpoint | Role | Description |
@@ -82,252 +95,116 @@ Local Development: `http://localhost:5000/api`
 
 ---
 
-## Detailed Admin Endpoints Documentation
+## Detailed Stripe Payment Endpoints Documentation
 
-### 1. Platform Statistics
+### 1. Create Checkout Session
 
-#### `GET /api/admin/stats`
-- **Role**: `admin`
+#### `POST /api/payments/create-checkout-session`
+Creates a Stripe Checkout Session in subscription mode. The vendor is redirected to Stripe to enter payment details.
+- **Role**: `vendor`
 - **Headers**: `Authorization: Bearer <token>`
+- **Rules**:
+  - `vendorId` is set strictly from `req.user.id`.
+  - Vendors already on an active Premium plan receive `409 Conflict`.
 - **Success Response (200 OK)**:
   ```json
   {
     "success": true,
-    "stats": {
-      "totalUsers": 24,
-      "totalVendors": 6,
-      "totalCustomers": 17,
-      "totalServices": 12,
-      "pendingServices": 3,
-      "totalTransactions": 5
-    }
+    "url": "https://checkout.stripe.com/c/pay/cs_test_a1b2c3d4..."
   }
   ```
-
----
-
-### 2. User Management
-
-#### `GET /api/admin/users`
-Lists registered platform users with search, role filtering, and pagination.
-- **Role**: `admin`
-- **Query Parameters**:
-  - `search` *(string, optional)*: Case-insensitive search on name or email.
-  - `role` *(string, optional)*: Filter by `customer`, `vendor`, or `admin`.
-  - `page` *(number, optional, default: 1)*: Page number.
-  - `limit` *(number, optional, default: 10, max: 50)*: Items per page.
-- **Success Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "total": 1,
-    "page": 1,
-    "limit": 10,
-    "users": [
-      {
-        "id": "6741b2e3f5a8c12345678901",
-        "name": "Julian Photography",
-        "email": "julian@wedplan.test",
-        "image": "https://...",
-        "role": "vendor",
-        "isBlocked": false,
-        "businessName": "Julian & Co.",
-        "subscriptionPlan": "premium",
-        "subscriptionExpiresAt": "2027-01-01T00:00:00.000Z",
-        "createdAt": "2026-01-10T09:00:00.000Z"
-      }
-    ]
-  }
-  ```
-
-#### `GET /api/admin/users/:id`
-Returns safe user profile plus activity statistics (`serviceCount` for vendors, `bookingCount` for customers).
-- **Role**: `admin`
-- **Success Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "user": {
-      "id": "6741b2e3f5a8c12345678901",
-      "name": "Julian Photography",
-      "email": "julian@wedplan.test",
-      "role": "vendor",
-      "isBlocked": false,
-      "businessName": "Julian & Co.",
-      "subscriptionPlan": "premium",
-      "serviceCount": 4,
-      "bookingCount": 0
-    }
-  }
-  ```
-- **Error Response (404 Not Found)**:
+- **Error Response (409 Conflict)**:
   ```json
   {
     "success": false,
-    "message": "User not found: 6741b2e3f5a8c12345678999"
-  }
-  ```
-
-#### `PATCH /api/admin/users/:id/block`
-Blocks a user account and deletes all active sessions from the Better Auth `sessions` collection.
-- **Role**: `admin`
-- **Security Protections**:
-  - Admin cannot block their own account (`403 Forbidden`).
-  - Admin cannot block another admin account (`403 Forbidden`).
-  - Cannot block an already-blocked user (`409 Conflict`).
-- **Success Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "User \"John Doe\" has been blocked successfully.",
-    "user": {
-      "id": "6741b2e3f5a8c12345678902",
-      "isBlocked": true
-    }
-  }
-  ```
-
-#### `PATCH /api/admin/users/:id/unblock`
-Restores access to a previously blocked user account.
-- **Role**: `admin`
-- **Error (409 Conflict)**: Returned if the user is not currently blocked.
-- **Success Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "User \"John Doe\" has been unblocked successfully.",
-    "user": {
-      "id": "6741b2e3f5a8c12345678902",
-      "isBlocked": false
-    }
+    "message": "You already have an active Premium subscription."
   }
   ```
 
 ---
 
-### 3. Service Moderation
+### 2. Session Status (Payment Success Page)
 
-#### `GET /api/admin/services`
-Lists all wedding services submitted to the platform.
-- **Role**: `admin`
+#### `GET /api/payments/session-status`
+Used by the frontend Payment Success page to confirm payment and check whether the backend webhook has activated Premium in MongoDB.
+- **Role**: `vendor`
 - **Query Parameters**:
-  - `search` *(string, optional)*: Case-insensitive search on `serviceName`.
-  - `status` *(string, optional)*: Filter by `pending`, `approved`, or `rejected`.
-  - `category` *(string, optional)*: Filter by category.
-  - `page` *(number, optional, default: 1)*
-  - `limit` *(number, optional, default: 10, max: 50)*
+  - `session_id` *(string, required)*: The Stripe Checkout session ID from URL.
+- **Security Guarantee**: This endpoint NEVER activates Premium directly. It only reports current database state while the client polls.
 - **Success Response (200 OK)**:
   ```json
   {
     "success": true,
-    "total": 12,
-    "page": 1,
-    "limit": 10,
-    "services": [
-      {
-        "id": "6741b2e3f5a8c1234567890a",
-        "serviceName": "Grand Ballroom Wedding Reception",
-        "category": "Wedding Venues",
-        "price": 6000,
-        "location": "New York, NY",
-        "status": "pending",
-        "isActive": true,
-        "createdAt": "2026-11-22T18:00:00.000Z",
-        "vendor": {
-          "name": "Jane Vendor",
-          "email": "jane@wedplan.test",
-          "businessName": "Rosewood Estates",
-          "image": "https://..."
-        }
-      }
-    ]
-  }
-  ```
-
-#### `GET /api/admin/services/:id`
-Returns full service details including vendor email and metadata.
-- **Role**: `admin`
-
-#### `PATCH /api/admin/services/:id/status`
-Approves, rejects, or places a service back to pending.
-- **Role**: `admin`
-- **Request Body**:
-  ```json
-  {
-    "status": "approved"
-  }
-  ```
-  *(Allowed values: `"approved"`, `"rejected"`, `"pending"`)*
-- **Success Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Service status updated to \"approved\" successfully.",
-    "service": {
-      "id": "6741b2e3f5a8c1234567890a",
-      "status": "approved"
-    }
-  }
-  ```
-- **Error (409 Conflict)**:
-  ```json
-  {
-    "success": false,
-    "message": "Service status is already \"approved\"."
-  }
-  ```
-
-#### `DELETE /api/admin/services/:id`
-Deletes an inappropriate service permanently. Existing customer bookings are kept intact with a "Service no longer available" label.
-- **Role**: `admin`
-- **Success Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Service \"Inappropriate Listing\" has been deleted successfully."
+    "paymentStatus": "paid",
+    "isPremium": true,
+    "subscriptionExpiresAt": "2026-12-22T19:30:00.000Z"
   }
   ```
 
 ---
 
-### 4. Transactions (Strictly Read-Only)
+### 3. Cancel Subscription
 
-#### `GET /api/admin/transactions`
-Lists platform payments recorded via Stripe Checkout.
-> **Security Guarantee**: Platform transactions are strictly read-only. No mutation routes (`POST`, `PUT`, `PATCH`, `DELETE`) exist to prevent manual manipulation of payment records.
-
-- **Role**: `admin`
-- **Query Parameters**:
-  - `status` *(string, optional)*: Filter by `pending`, `completed`, or `failed`.
-  - `page` *(number, optional, default: 1)*
-  - `limit` *(number, optional, default: 10, max: 50)*
+#### `POST /api/payments/cancel-subscription`
+Schedules subscription cancellation at the end of the current billing period.
+- **Role**: `vendor`
+- **Rules**:
+  - Sets `cancel_at_period_end: true` in Stripe.
+  - Premium access remains active until `subscriptionExpiresAt`.
+  - When the period ends, Stripe issues `customer.subscription.deleted`, which downgrades the user.
 - **Success Response (200 OK)**:
   ```json
   {
     "success": true,
-    "total": 3,
-    "page": 1,
-    "limit": 10,
+    "message": "Subscription scheduled to cancel at the end of the current billing period. Premium access remains active until expiration.",
+    "subscriptionExpiresAt": "2026-12-22T19:30:00.000Z",
+    "cancelAtPeriodEnd": true
+  }
+  ```
+
+---
+
+### 4. Vendor Subscription Details
+
+#### `GET /api/vendor/subscription`
+Returns the vendor's active plan, subscription expiry, cancellation schedule, and past transactions.
+- **Role**: `vendor`
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "plan": "premium",
+    "isPremium": true,
+    "subscriptionExpiresAt": "2026-12-22T19:30:00.000Z",
+    "cancelAtPeriodEnd": false,
     "transactions": [
       {
         "id": "6741b2e3f5a8c12345678950",
-        "vendorId": "user_vendor_123",
         "plan": "premium",
-        "amount": 2900,
+        "amount": 29,
         "currency": "usd",
-        "stripeSessionId": "cs_test_a1b2c3d4",
-        "stripeSubscriptionId": "sub_12345",
         "status": "completed",
-        "createdAt": "2026-11-22T12:00:00.000Z",
-        "vendor": {
-          "name": "Jane Vendor",
-          "businessName": "Rosewood Estates",
-          "email": "jane@wedplan.test"
-        }
+        "stripeSessionId": "cs_test_...",
+        "createdAt": "2026-11-22T19:30:00.000Z"
       }
     ]
   }
   ```
+
+---
+
+### 5. Stripe Webhook Listener
+
+#### `POST /api/webhooks/stripe`
+Receives raw event payloads directly from Stripe.
+- **Authentication**: Verified cryptographically with `stripe.webhooks.constructEvent` using `STRIPE_WEBHOOK_SECRET` and the `stripe-signature` header.
+- **Handled Events**:
+  - `checkout.session.completed`: Activates Premium in DB and writes transaction.
+  - `invoice.paid`: Extends subscription period for renewals and logs renewal transaction.
+  - `invoice.payment_failed`: Logs failed transaction without extending access.
+  - `customer.subscription.deleted`: Downgrades vendor to "free" and deactivates services exceeding the free plan limit (retains the 3 newest non-rejected services).
+  - `customer.subscription.updated`: Keeps `subscriptionExpiresAt` and `cancelAtPeriodEnd` in sync.
+- **Response**: `200 OK` (`{ "received": true }`).
 
 ---
 
@@ -341,9 +218,9 @@ All error responses adhere to:
 }
 ```
 HTTP status codes used:
-- `400`: Bad Request (invalid input, malformed ObjectId)
-- `401`: Unauthorized (missing, invalid, or expired JWT token, user not found)
-- `403`: Forbidden (insufficient role privileges, blocked account, attempting self-block or admin-block)
-- `404`: Not Found (resource does not exist)
-- `409`: Conflict (attempting to set already existing state or duplicate active booking)
+- `400`: Bad Request (invalid parameter, malformed ObjectId, or invalid webhook signature)
+- `401`: Unauthorized (missing, invalid, or expired JWT token)
+- `403`: Forbidden (insufficient role privileges, blocked account, or accessing another user's session)
+- `404`: Not Found (resource or subscription not found)
+- `409`: Conflict (already premium or duplicate active booking)
 - `500`: Internal Server Error
