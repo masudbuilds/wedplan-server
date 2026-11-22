@@ -176,3 +176,113 @@ export async function getAdminServiceById(req, res, next) {
     next(error);
   }
 }
+
+/**
+ * PATCH /api/admin/services/:id/status
+ * Role: admin
+ * Moderates service status ("approved", "rejected", "pending").
+ * Returns 409 if status is already set to the requested value.
+ */
+export async function updateServiceStatus(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid service ID: ${id}`,
+      });
+    }
+
+    const { status } = req.body;
+    const allowed = [
+      SERVICE_STATUS.APPROVED,
+      SERVICE_STATUS.REJECTED,
+      SERVICE_STATUS.PENDING,
+    ];
+
+    if (!status || !allowed.includes(status.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: `Status must be one of: "${SERVICE_STATUS.APPROVED}", "${SERVICE_STATUS.REJECTED}", or "${SERVICE_STATUS.PENDING}".`,
+      });
+    }
+
+    const targetStatus = status.trim();
+    const servicesCollection = getServicesCollection();
+    const service = await servicesCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    // Setting the same status again returns 409 Conflict
+    if (service.status === targetStatus) {
+      return res.status(409).json({
+        success: false,
+        message: `Service status is already "${targetStatus}".`,
+      });
+    }
+
+    await servicesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: targetStatus,
+          statusUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    const updated = await servicesCollection.findOne({ _id: new ObjectId(id) });
+    const [updatedWithVendor] = await attachAdminVendorDetails([updated]);
+
+    res.json({
+      success: true,
+      message: `Service status updated to "${targetStatus}" successfully.`,
+      service: updatedWithVendor,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /api/admin/services/:id
+ * Role: admin
+ * Deletes an inappropriate service permanently.
+ * Existing customer bookings are preserved (displaying "Service no longer available").
+ */
+export async function deleteAdminService(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid service ID: ${id}`,
+      });
+    }
+
+    const servicesCollection = getServicesCollection();
+    const service = await servicesCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    await servicesCollection.deleteOne({ _id: new ObjectId(id) });
+
+    res.json({
+      success: true,
+      message: `Service "${service.serviceName}" has been deleted successfully.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+}

@@ -5,6 +5,8 @@ import { validateObjectIdParam } from "../utils/object-id.js";
 import {
   getAdminServices,
   getAdminServiceById,
+  updateServiceStatus,
+  deleteAdminService,
 } from "../controllers/admin-services.js";
 
 const router = Router();
@@ -17,5 +19,19 @@ router.get("/services", getAdminServices);
 
 // GET /api/admin/services/:id - get service details with vendor info
 router.get("/services/:id", validateObjectIdParam("id"), getAdminServiceById);
+
+// PATCH /api/admin/services/:id/status - approve, reject, or pending moderation
+router.patch(
+  "/services/:id/status",
+  validateObjectIdParam("id"),
+  updateServiceStatus
+);
+
+// DELETE /api/admin/services/:id - delete inappropriate service
+router.delete(
+  "/services/:id",
+  validateObjectIdParam("id"),
+  deleteAdminService
+);
 
 export default router;
