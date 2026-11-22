@@ -1,4 +1,6 @@
+import { ObjectId } from "mongodb";
 import { getStripe } from "../config/stripe.js";
+import { getUsersCollection } from "../config/db.js";
 import { isPremium } from "../utils/subscription.js";
 
 /**
@@ -57,6 +59,66 @@ export async function createCheckoutSession(req, res, next) {
     res.json({
       success: true,
       url: session.url,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/payments/session-status?session_id=...
+ * Role: vendor
+ * Checks Checkout Session status for the Payment Success page.
+ * Strictly READ-ONLY: never activates premium access itself.
+ * Reports whether the database webhook processor has activated premium.
+ */
+export async function getSessionStatus(req, res, next) {
+  try {
+    const { session_id } = req.query;
+    if (!session_id || typeof session_id !== "string" || !session_id.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Query parameter 'session_id' is required.",
+      });
+    }
+
+    const stripe = getStripe();
+    let session;
+    try {
+      session = await stripe.checkout.sessions.retrieve(session_id.trim());
+    } catch (stripeErr) {
+      return res.status(404).json({
+        success: false,
+        message: "Stripe Checkout session not found.",
+      });
+    }
+
+    // Ownership check: must belong to the authenticated vendor
+    const sessionVendorId =
+      session.metadata?.vendorId || session.client_reference_id;
+
+    if (sessionVendorId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You are not authorized to view this checkout session.",
+      });
+    }
+
+    // Query latest status directly from MongoDB (populated only by verified webhooks)
+    const usersCollection = getUsersCollection();
+    const currentUser = await usersCollection.findOne({
+      $or: [
+        { _id: req.user.id },
+        { id: req.user.id },
+        ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+      ],
+    });
+
+    res.json({
+      success: true,
+      paymentStatus: session.payment_status,
+      isPremium: isPremium(currentUser),
+      subscriptionExpiresAt: currentUser?.subscriptionExpiresAt || null,
     });
   } catch (error) {
     next(error);
