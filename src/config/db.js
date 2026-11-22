@@ -1,5 +1,15 @@
 import { MongoClient } from "mongodb";
 
+/**
+ * ID Representation Architecture Decision:
+ * 1. User IDs (`vendorId`, `customerId`) in business documents (services, bookings, transactions)
+ *    are ALWAYS saved as uniform STRINGS (`req.user.id = user._id.toString()`).
+ *    This ensures 100% compatibility across Better Auth authentication plugins, whether
+ *    users are created with native MongoDB ObjectIds or alphanumeric strings (cuid/nanoid).
+ * 2. Primary document IDs (`_id`) for services, bookings, and transactions are native MongoDB `ObjectId`.
+ * 3. Foreign service references (`serviceId` in bookings) are native MongoDB `ObjectId`.
+ */
+
 let client = null;
 let db = null;
 
@@ -38,6 +48,18 @@ async function createIndexes() {
     await bookings.createIndex({ customerId: 1 });
     await bookings.createIndex({ vendorId: 1 });
     await bookings.createIndex({ serviceId: 1 });
+
+    // Partial unique index: stops race conditions for duplicate active bookings
+    // A customer cannot have two pending or accepted bookings for the same service on the same date
+    await bookings.createIndex(
+      { serviceId: 1, customerId: 1, eventDate: 1 },
+      {
+        unique: true,
+        partialFilterExpression: {
+          status: { $in: ["pending", "accepted"] },
+        },
+      }
+    );
 
     const transactions = db.collection("transactions");
     await transactions.createIndex(
