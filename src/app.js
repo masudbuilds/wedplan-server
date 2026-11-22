@@ -7,6 +7,7 @@ import categoriesRoutes from "./routes/categories.js";
 import servicesRoutes from "./routes/services.js";
 import authRoutes from "./routes/auth.js";
 import vendorServicesRoutes from "./routes/vendor-services.js";
+import vendorBookingsRoutes from "./routes/vendor-bookings.js";
 import bookingsRoutes from "./routes/bookings.js";
 
 const app = express();
@@ -51,6 +52,7 @@ app.use("/api", authRoutes);
 
 // Mount vendor routes (protected)
 app.use("/api/vendor", vendorServicesRoutes);
+app.use("/api/vendor", vendorBookingsRoutes);
 
 // Mount booking routes (protected)
 app.use("/api/bookings", bookingsRoutes);
