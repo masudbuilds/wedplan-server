@@ -1,6 +1,6 @@
 # WedPlan API Documentation
 
-This document describes all API endpoints currently implemented in the **WedPlan Server**.
+This document describes all API endpoints implemented in the **WedPlan Server**.
 
 ---
 
@@ -16,7 +16,7 @@ Local Development: `http://localhost:5000/api`
 - JWT tokens are verified against Better Auth's remote JWKS endpoint using `jose.createRemoteJWKSet`.
 - Verified user record is loaded directly from the MongoDB `users` collection.
 - Roles (`customer`, `vendor`, `admin`), `isBlocked` flags, and subscription details are strictly determined by MongoDB, never trusted from the client payload.
-- All IDs (`vendorId`, `customerId`) are uniformly referenced as strings for cross-adapter compatibility.
+- All user IDs (`vendorId`, `customerId`) are uniformly referenced as strings for cross-adapter compatibility.
 
 ---
 
@@ -29,7 +29,7 @@ Local Development: `http://localhost:5000/api`
 | `GET` | `/api/categories` | Public | 6 wedding service categories |
 | `GET` | `/api/services` | Public | List approved & active services (search, filter, sort, paginate) |
 | `GET` | `/api/services/featured` | Public | 6 latest approved & active services |
-| `GET` | `/api/services/:id` | Public | Single approved & active service with vendor info |
+| `GET` | `/api/services/:id` | Public | Single approved & active service with sanitized vendor info |
 
 ### General Protected Endpoints
 | Method | Endpoint | Role | Description |
@@ -65,300 +65,267 @@ Local Development: `http://localhost:5000/api`
 |---|---|---|---|
 | `GET` | `/api/vendor/stats` | Vendor | Vendor metrics (services, active, bookings, subscription) |
 | `GET` | `/api/customer/stats` | Customer | Customer metrics (total, pending, accepted, rejected, cancelled) |
+| `GET` | `/api/admin/stats` | Admin | Platform overview metrics (users, vendors, customers, services, transactions) |
+
+### Admin Platform Management (`/api/admin`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/admin/users` | Admin | List users with search (name/email), role filter, and pagination |
+| `GET` | `/api/admin/users/:id` | Admin | Get user details and metrics (service or booking count) |
+| `PATCH` | `/api/admin/users/:id/block` | Admin | Block user and immediately revoke Better Auth sessions |
+| `PATCH` | `/api/admin/users/:id/unblock` | Admin | Unblock a user |
+| `GET` | `/api/admin/services` | Admin | List all services with status filter, category, and search |
+| `GET` | `/api/admin/services/:id` | Admin | Service details with vendor contact info (email included) |
+| `PATCH` | `/api/admin/services/:id/status` | Admin | Moderate service status (`approved`, `rejected`, `pending`) |
+| `DELETE` | `/api/admin/services/:id` | Admin | Delete inappropriate service |
+| `GET` | `/api/admin/transactions` | Admin | Read-only platform transactions list |
 
 ---
 
-## Detailed Endpoint Documentation
+## Detailed Admin Endpoints Documentation
 
-### 1. Vendor Services
+### 1. Platform Statistics
 
-#### `POST /api/vendor/services`
-Creates a new service in `status: "pending"` with `isActive: true`.
-- **Role**: `vendor`
+#### `GET /api/admin/stats`
+- **Role**: `admin`
 - **Headers**: `Authorization: Bearer <token>`
-- **Request Body**:
-  ```json
-  {
-    "serviceName": "Sunset Seaside Wedding Photography",
-    "category": "Photography & Videography",
-    "description": "Full coverage of your special day with drone shots and edited digital gallery.",
-    "price": 2500,
-    "location": "Miami, FL",
-    "images": [
-      "https://images.unsplash.com/photo-1519741497674-611481863552"
-    ]
-  }
-  ```
-- **Success (201 Created)**:
+- **Success Response (200 OK)**:
   ```json
   {
     "success": true,
-    "message": "Service created successfully and is pending admin approval.",
+    "stats": {
+      "totalUsers": 24,
+      "totalVendors": 6,
+      "totalCustomers": 17,
+      "totalServices": 12,
+      "pendingServices": 3,
+      "totalTransactions": 5
+    }
+  }
+  ```
+
+---
+
+### 2. User Management
+
+#### `GET /api/admin/users`
+Lists registered platform users with search, role filtering, and pagination.
+- **Role**: `admin`
+- **Query Parameters**:
+  - `search` *(string, optional)*: Case-insensitive search on name or email.
+  - `role` *(string, optional)*: Filter by `customer`, `vendor`, or `admin`.
+  - `page` *(number, optional, default: 1)*: Page number.
+  - `limit` *(number, optional, default: 10, max: 50)*: Items per page.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "total": 1,
+    "page": 1,
+    "limit": 10,
+    "users": [
+      {
+        "id": "6741b2e3f5a8c12345678901",
+        "name": "Julian Photography",
+        "email": "julian@wedplan.test",
+        "image": "https://...",
+        "role": "vendor",
+        "isBlocked": false,
+        "businessName": "Julian & Co.",
+        "subscriptionPlan": "premium",
+        "subscriptionExpiresAt": "2027-01-01T00:00:00.000Z",
+        "createdAt": "2026-01-10T09:00:00.000Z"
+      }
+    ]
+  }
+  ```
+
+#### `GET /api/admin/users/:id`
+Returns safe user profile plus activity statistics (`serviceCount` for vendors, `bookingCount` for customers).
+- **Role**: `admin`
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "user": {
+      "id": "6741b2e3f5a8c12345678901",
+      "name": "Julian Photography",
+      "email": "julian@wedplan.test",
+      "role": "vendor",
+      "isBlocked": false,
+      "businessName": "Julian & Co.",
+      "subscriptionPlan": "premium",
+      "serviceCount": 4,
+      "bookingCount": 0
+    }
+  }
+  ```
+- **Error Response (404 Not Found)**:
+  ```json
+  {
+    "success": false,
+    "message": "User not found: 6741b2e3f5a8c12345678999"
+  }
+  ```
+
+#### `PATCH /api/admin/users/:id/block`
+Blocks a user account and deletes all active sessions from the Better Auth `sessions` collection.
+- **Role**: `admin`
+- **Security Protections**:
+  - Admin cannot block their own account (`403 Forbidden`).
+  - Admin cannot block another admin account (`403 Forbidden`).
+  - Cannot block an already-blocked user (`409 Conflict`).
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "User \"John Doe\" has been blocked successfully.",
+    "user": {
+      "id": "6741b2e3f5a8c12345678902",
+      "isBlocked": true
+    }
+  }
+  ```
+
+#### `PATCH /api/admin/users/:id/unblock`
+Restores access to a previously blocked user account.
+- **Role**: `admin`
+- **Error (409 Conflict)**: Returned if the user is not currently blocked.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "User \"John Doe\" has been unblocked successfully.",
+    "user": {
+      "id": "6741b2e3f5a8c12345678902",
+      "isBlocked": false
+    }
+  }
+  ```
+
+---
+
+### 3. Service Moderation
+
+#### `GET /api/admin/services`
+Lists all wedding services submitted to the platform.
+- **Role**: `admin`
+- **Query Parameters**:
+  - `search` *(string, optional)*: Case-insensitive search on `serviceName`.
+  - `status` *(string, optional)*: Filter by `pending`, `approved`, or `rejected`.
+  - `category` *(string, optional)*: Filter by category.
+  - `page` *(number, optional, default: 1)*
+  - `limit` *(number, optional, default: 10, max: 50)*
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "total": 12,
+    "page": 1,
+    "limit": 10,
+    "services": [
+      {
+        "id": "6741b2e3f5a8c1234567890a",
+        "serviceName": "Grand Ballroom Wedding Reception",
+        "category": "Wedding Venues",
+        "price": 6000,
+        "location": "New York, NY",
+        "status": "pending",
+        "isActive": true,
+        "createdAt": "2026-11-22T18:00:00.000Z",
+        "vendor": {
+          "name": "Jane Vendor",
+          "email": "jane@wedplan.test",
+          "businessName": "Rosewood Estates",
+          "image": "https://..."
+        }
+      }
+    ]
+  }
+  ```
+
+#### `GET /api/admin/services/:id`
+Returns full service details including vendor email and metadata.
+- **Role**: `admin`
+
+#### `PATCH /api/admin/services/:id/status`
+Approves, rejects, or places a service back to pending.
+- **Role**: `admin`
+- **Request Body**:
+  ```json
+  {
+    "status": "approved"
+  }
+  ```
+  *(Allowed values: `"approved"`, `"rejected"`, `"pending"`)*
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "Service status updated to \"approved\" successfully.",
     "service": {
       "id": "6741b2e3f5a8c1234567890a",
-      "vendorId": "user_vendor_123",
-      "serviceName": "Sunset Seaside Wedding Photography",
-      "category": "Photography & Videography",
-      "description": "Full coverage of your special day...",
-      "price": 2500,
-      "location": "Miami, FL",
-      "images": ["https://..."],
-      "status": "pending",
-      "isActive": true,
-      "createdAt": "2026-11-22T18:00:00.000Z"
+      "status": "approved"
     }
-  }
-  ```
-- **Error (403 Forbidden - Free Plan Limit)**:
-  ```json
-  {
-    "success": false,
-    "message": "Free plan allows a maximum of 3 active services. Please upgrade to Premium to publish unlimited services."
-  }
-  ```
-
-#### `GET /api/vendor/services`
-Returns all services owned by the vendor (all statuses: `pending`, `approved`, `rejected`), sorted newest first.
-- **Role**: `vendor`
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "count": 3,
-    "services": [ ... ]
-  }
-  ```
-
-#### `GET /api/vendor/services/:id`
-Returns single service details for the owning vendor.
-- **Role**: `vendor`
-- **Errors**: `400` (invalid ObjectId), `404` (not found), `403` (belongs to another vendor).
-
-#### `PATCH /api/vendor/services/:id`
-Updates editable fields (`serviceName`, `category`, `description`, `price`, `location`, `images`).
-- **Role**: `vendor`
-- **Request Body**: (any combination of editable fields)
-  ```json
-  {
-    "price": 2800,
-    "description": "Updated package details with aerial coverage included."
-  }
-  ```
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Service updated successfully",
-    "service": { ... }
-  }
-  ```
-
-#### `PATCH /api/vendor/services/:id/availability`
-Toggles `isActive` flag.
-- **Role**: `vendor`
-- **Request Body**:
-  ```json
-  {
-    "isActive": false
-  }
-  ```
-- **Rules**: Turning ON enforces free plan limit (max 3 active services) and rejects activating rejected services (`400`).
-
-#### `DELETE /api/vendor/services/:id`
-Permanently deletes a service owned by the vendor.
-- **Role**: `vendor`
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Service deleted successfully"
-  }
-  ```
-
----
-
-### 2. Customer Bookings
-
-#### `POST /api/bookings`
-Submits a booking request for an approved and active service.
-- **Role**: `customer`
-- **Request Body**:
-  ```json
-  {
-    "serviceId": "6741b2e3f5a8c1234567890a",
-    "eventDate": "2026-12-15",
-    "eventLocation": "The Plaza Hotel, New York, NY",
-    "message": "We would love to reserve our date for 150 guests."
-  }
-  ```
-- **Success (201 Created)**:
-  ```json
-  {
-    "success": true,
-    "message": "Booking request submitted successfully.",
-    "booking": {
-      "id": "6741b2e3f5a8c12345678999",
-      "serviceId": "6741b2e3f5a8c1234567890a",
-      "serviceName": "Editorial Wedding Photo & Cinema",
-      "vendorId": "vendor_user_123",
-      "customerId": "customer_user_456",
-      "eventDate": "2026-12-15",
-      "eventLocation": "The Plaza Hotel, New York, NY",
-      "message": "We would love to reserve...",
-      "status": "pending",
-      "createdAt": "2026-11-22T18:00:00.000Z"
-    }
-  }
-  ```
-- **Error (409 Conflict - Duplicate Booking)**:
-  ```json
-  {
-    "success": false,
-    "message": "You already have an active booking (pending) for this service on 2026-12-15."
-  }
-  ```
-
-#### `GET /api/bookings/my`
-Returns logged-in customer's booking list with service preview and vendor details (excluding vendor email).
-- **Role**: `customer`
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "count": 1,
-    "bookings": [
-      {
-        "id": "6741b2e3f5a8c12345678999",
-        "serviceId": "6741b2e3f5a8c1234567890a",
-        "serviceName": "Editorial Wedding Photo & Cinema",
-        "serviceImage": "https://images.unsplash.com/photo-1519741497674-611481863552",
-        "eventDate": "2026-12-15",
-        "eventLocation": "The Plaza Hotel, New York, NY",
-        "status": "pending",
-        "vendor": {
-          "name": "Julian & Co. Photography",
-          "businessName": "Julian & Co. Photography",
-          "image": "https://..."
-        }
-      }
-    ]
-  }
-  ```
-
-#### `GET /api/bookings/:id`
-Returns booking details. Accessible only to the customer who submitted it or the vendor who received it.
-- **Role**: `customer` (owner) or `vendor` (recipient)
-- **Errors**: `403 Forbidden` if user is neither the customer nor the vendor.
-
-#### `PATCH /api/bookings/:id/cancel`
-Cancels a pending booking.
-- **Role**: `customer` (owner)
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Booking request cancelled successfully."
   }
   ```
 - **Error (409 Conflict)**:
   ```json
   {
     "success": false,
-    "message": "Booking cannot be cancelled because it is already accepted."
+    "message": "Service status is already \"approved\"."
+  }
+  ```
+
+#### `DELETE /api/admin/services/:id`
+Deletes an inappropriate service permanently. Existing customer bookings are kept intact with a "Service no longer available" label.
+- **Role**: `admin`
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "Service \"Inappropriate Listing\" has been deleted successfully."
   }
   ```
 
 ---
 
-### 3. Vendor Bookings
+### 4. Transactions (Strictly Read-Only)
 
-#### `GET /api/vendor/bookings`
-Returns bookings for vendor's services with customer contact details and service name/image.
-- **Role**: `vendor`
+#### `GET /api/admin/transactions`
+Lists platform payments recorded via Stripe Checkout.
+> **Security Guarantee**: Platform transactions are strictly read-only. No mutation routes (`POST`, `PUT`, `PATCH`, `DELETE`) exist to prevent manual manipulation of payment records.
+
+- **Role**: `admin`
 - **Query Parameters**:
-  - `status` *(optional)*: Filter by `pending`, `accepted`, `rejected`, or `cancelled`.
-- **Success (200 OK)**:
+  - `status` *(string, optional)*: Filter by `pending`, `completed`, or `failed`.
+  - `page` *(number, optional, default: 1)*
+  - `limit` *(number, optional, default: 10, max: 50)*
+- **Success Response (200 OK)**:
   ```json
   {
     "success": true,
-    "count": 2,
-    "bookings": [
+    "total": 3,
+    "page": 1,
+    "limit": 10,
+    "transactions": [
       {
-        "id": "6741b2e3f5a8c12345678999",
-        "serviceName": "Editorial Wedding Photo & Cinema",
-        "eventDate": "2026-12-15",
-        "eventLocation": "The Plaza Hotel, New York, NY",
-        "status": "pending",
-        "customer": {
-          "name": "Sarah Connor",
-          "email": "sarah@example.com",
-          "image": "https://..."
+        "id": "6741b2e3f5a8c12345678950",
+        "vendorId": "user_vendor_123",
+        "plan": "premium",
+        "amount": 2900,
+        "currency": "usd",
+        "stripeSessionId": "cs_test_a1b2c3d4",
+        "stripeSubscriptionId": "sub_12345",
+        "status": "completed",
+        "createdAt": "2026-11-22T12:00:00.000Z",
+        "vendor": {
+          "name": "Jane Vendor",
+          "businessName": "Rosewood Estates",
+          "email": "jane@wedplan.test"
         }
       }
     ]
-  }
-  ```
-
-#### `PATCH /api/vendor/bookings/:id/status`
-Accepts or rejects a pending booking.
-- **Role**: `vendor`
-- **Request Body**:
-  ```json
-  {
-    "status": "accepted"
-  }
-  ```
-  *(or `"status": "rejected"`)*
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Booking request marked as accepted successfully."
-  }
-  ```
-- **Error (409 Conflict)**:
-  ```json
-  {
-    "success": false,
-    "message": "Booking request cannot be modified because its current status is already accepted."
-  }
-  ```
-
----
-
-### 4. Dashboard Statistics
-
-#### `GET /api/vendor/stats`
-- **Role**: `vendor`
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "stats": {
-      "totalServices": 4,
-      "activeServices": 3,
-      "pendingBookings": 2,
-      "acceptedBookings": 5,
-      "subscriptionPlan": "free",
-      "isPremium": false,
-      "subscriptionExpiresAt": null
-    }
-  }
-  ```
-
-#### `GET /api/customer/stats`
-- **Role**: `customer`
-- **Success (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "stats": {
-      "totalBookings": 4,
-      "pending": 1,
-      "accepted": 2,
-      "rejected": 0,
-      "cancelled": 1
-    }
   }
   ```
 
@@ -366,7 +333,7 @@ Accepts or rejects a pending booking.
 
 ## Universal Error Response Format
 
-All error responses across all endpoints adhere to:
+All error responses adhere to:
 ```json
 {
   "success": false,
@@ -374,9 +341,9 @@ All error responses across all endpoints adhere to:
 }
 ```
 HTTP status codes used:
-- `400`: Bad Request (invalid parameter, invalid ObjectId, or validation failure)
-- `401`: Unauthorized (missing, invalid, or expired JWT token)
-- `403`: Forbidden (insufficient role privileges, blocked account, or ownership violation)
+- `400`: Bad Request (invalid input, malformed ObjectId)
+- `401`: Unauthorized (missing, invalid, or expired JWT token, user not found)
+- `403`: Forbidden (insufficient role privileges, blocked account, attempting self-block or admin-block)
 - `404`: Not Found (resource does not exist)
-- `409`: Conflict (duplicate active booking or invalid state transition)
+- `409`: Conflict (attempting to set already existing state or duplicate active booking)
 - `500`: Internal Server Error
