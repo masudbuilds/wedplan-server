@@ -102,3 +102,27 @@ export async function verifyToken(req, res, next) {
     next(error);
   }
 }
+
+/**
+ * Middleware factory: Enforces role-based access control.
+ * Rejects requests with 403 Forbidden if user's role is not among allowed roles.
+ */
+export function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: `Forbidden: requires one of the following roles: [${roles.join(", ")}]`,
+      });
+    }
+
+    next();
+  };
+}
