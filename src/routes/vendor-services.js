@@ -7,6 +7,7 @@ import {
   getMyServices,
   getMyServiceById,
   updateService,
+  toggleServiceAvailability,
   deleteService,
 } from "../controllers/vendor-services.js";
 
@@ -26,6 +27,13 @@ router.get("/services/:id", validateObjectIdParam("id"), getMyServiceById);
 
 // PATCH /api/vendor/services/:id - update own service
 router.patch("/services/:id", validateObjectIdParam("id"), updateService);
+
+// PATCH /api/vendor/services/:id/availability - toggle availability
+router.patch(
+  "/services/:id/availability",
+  validateObjectIdParam("id"),
+  toggleServiceAvailability
+);
 
 // DELETE /api/vendor/services/:id - delete own service
 router.delete("/services/:id", validateObjectIdParam("id"), deleteService);
