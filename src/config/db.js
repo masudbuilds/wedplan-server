@@ -12,10 +12,15 @@ import { MongoClient } from "mongodb";
 
 let client = null;
 let db = null;
+let connectPromise = null;
 
 export async function connectDB() {
   if (db) {
     return db;
+  }
+
+  if (connectPromise) {
+    return connectPromise;
   }
 
   const uri = process.env.MONGODB_URI;
@@ -25,15 +30,24 @@ export async function connectDB() {
     throw new Error("MONGODB_URI is not defined in environment variables");
   }
 
-  client = new MongoClient(uri);
-  await client.connect();
-  db = client.db(dbName);
-  console.log(`Connected to MongoDB database: ${dbName}`);
+  connectPromise = (async () => {
+    try {
+      client = new MongoClient(uri);
+      await client.connect();
+      db = client.db(dbName);
+      console.log(`Connected to MongoDB database: ${dbName}`);
 
-  // Create useful indexes for queries and constraints
-  await createIndexes();
+      // Create useful indexes for queries and constraints safely
+      await createIndexes();
 
-  return db;
+      return db;
+    } catch (err) {
+      connectPromise = null;
+      throw err;
+    }
+  })();
+
+  return connectPromise;
 }
 
 async function createIndexes() {
