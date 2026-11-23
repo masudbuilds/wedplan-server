@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -45,6 +46,17 @@ app.use(
   })
 );
 
+// Root route (prevents 404 on base path, fast health ping)
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "WedPlan API Server is running",
+  });
+});
+
+// Health check endpoint (load balancers ping this before DB connection)
+app.use("/api/health", healthRoutes);
+
 // 1. Stripe webhook route mounted BEFORE express.json() with raw body parsing
 app.use(
   "/api/webhooks",
@@ -58,23 +70,16 @@ app.use(express.json());
 // 3. Lazy database connection helper for serverless cold-start readiness
 app.use(async (req, res, next) => {
   try {
-    await connectDB();
+    if (process.env.MONGODB_URI) {
+      await connectDB();
+    }
     next();
   } catch (err) {
     next(err);
   }
 });
 
-// Root route (prevents 404 on base path)
-app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "WedPlan API Server is running",
-  });
-});
-
 // Mount public routes
-app.use("/api/health", healthRoutes);
 app.use("/api/categories", categoriesRoutes);
 app.use("/api/services", servicesRoutes);
 
