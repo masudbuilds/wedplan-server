@@ -63,6 +63,7 @@ async function findVendorForSubscription(vendorId, stripeSubId) {
 /**
  * 1. Handles checkout.session.completed
  * Activates vendor Premium plan and idempotently creates a completed transaction.
+ * Awaits all database work before resolving.
  */
 async function handleCheckoutSessionCompleted(session) {
   const isPaid =
@@ -81,6 +82,7 @@ async function handleCheckoutSessionCompleted(session) {
 
   const vendor = await findVendorForSubscription(vendorId, stripeSubId);
   if (!vendor) {
+    console.log(`[webhook] vendor not found for id ${vendorId}`);
     return;
   }
 
@@ -110,6 +112,7 @@ async function handleCheckoutSessionCompleted(session) {
       },
     }
   );
+  console.log(`[webhook] premium activated for vendor ${vendor._id.toString()}`);
 
   try {
     const existing = await transactionsCollection.findOne({
@@ -127,11 +130,12 @@ async function handleCheckoutSessionCompleted(session) {
         status: TRANSACTION_STATUS.COMPLETED,
         createdAt: new Date(),
       });
+      console.log(`[webhook] transaction saved for session ${session.id}`);
     }
   } catch (txErr) {
     // Gracefully handle duplicate key race condition
     if (txErr.code !== 11000) {
-      console.error("Stripe webhook transaction record error:", txErr.message);
+      console.error(`[webhook] failed: ${txErr.message}`);
       throw txErr;
     }
   }
@@ -140,21 +144,34 @@ async function handleCheckoutSessionCompleted(session) {
 /**
  * 2. Handles invoice.paid (subscription renewals)
  * Extends subscription period and records renewal transaction.
+ * Skips creating duplicate transactions for the initial subscription creation.
  */
 async function handleInvoicePaid(invoice) {
+  // First payment for a subscription is already recorded by checkout.session.completed.
+  // Do not create a duplicate transaction for the initial subscription creation.
+  if (invoice.billing_reason === "subscription_create") {
+    return;
+  }
+
   const stripeSubId =
-    typeof invoice.subscription === "string"
+    invoice.parent?.subscription_details?.subscription ||
+    (typeof invoice.subscription === "string"
       ? invoice.subscription
-      : invoice.subscription?.id;
+      : invoice.subscription?.id) ||
+    invoice.subscription_details?.subscription;
 
   if (!stripeSubId) return;
 
   const vendorId =
+    invoice.parent?.subscription_details?.metadata?.vendorId ||
     invoice.subscription_details?.metadata?.vendorId ||
     invoice.metadata?.vendorId;
 
   const vendor = await findVendorForSubscription(vendorId, stripeSubId);
-  if (!vendor) return;
+  if (!vendor) {
+    console.log(`[webhook] vendor not found for id ${vendorId}`);
+    return;
+  }
 
   let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   try {
@@ -180,6 +197,7 @@ async function handleInvoicePaid(invoice) {
       },
     }
   );
+  console.log(`[webhook] premium activated for vendor ${vendor._id.toString()}`);
 
   try {
     const existing = await transactionsCollection.findOne({
@@ -197,10 +215,11 @@ async function handleInvoicePaid(invoice) {
         status: TRANSACTION_STATUS.COMPLETED,
         createdAt: new Date(),
       });
+      console.log(`[webhook] transaction saved for session ${invoice.id}`);
     }
   } catch (txErr) {
     if (txErr.code !== 11000) {
-      console.error("Stripe webhook invoice transaction error:", txErr.message);
+      console.error(`[webhook] failed: ${txErr.message}`);
       throw txErr;
     }
   }
@@ -212,13 +231,16 @@ async function handleInvoicePaid(invoice) {
  */
 async function handleInvoicePaymentFailed(invoice) {
   const stripeSubId =
-    typeof invoice.subscription === "string"
+    invoice.parent?.subscription_details?.subscription ||
+    (typeof invoice.subscription === "string"
       ? invoice.subscription
-      : invoice.subscription?.id;
+      : invoice.subscription?.id) ||
+    invoice.subscription_details?.subscription;
 
   if (!stripeSubId) return;
 
   const vendorId =
+    invoice.parent?.subscription_details?.metadata?.vendorId ||
     invoice.subscription_details?.metadata?.vendorId ||
     invoice.metadata?.vendorId;
 
@@ -246,7 +268,7 @@ async function handleInvoicePaymentFailed(invoice) {
     }
   } catch (txErr) {
     if (txErr.code !== 11000) {
-      console.error("Stripe webhook failed invoice transaction error:", txErr.message);
+      console.error(`[webhook] failed: ${txErr.message}`);
       throw txErr;
     }
   }
@@ -322,35 +344,65 @@ async function handleSubscriptionUpdated(subscription) {
 
 /**
  * POST /api/webhooks/stripe
- * Stripe webhook endpoint. Validates raw body with STRIPE_WEBHOOK_SECRET.
+ * Stripe webhook endpoint. Validates raw Buffer body with STRIPE_WEBHOOK_SECRET.
  * No Bearer token auth is used because Stripe invokes this directly.
  */
 export async function handleStripeWebhook(req, res) {
-  const sig = req.headers["stripe-signature"];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  // Check required environment variables upfront
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    console.error("[webhook] Missing required environment variable: STRIPE_WEBHOOK_SECRET");
+    return res.status(500).json({
+      success: false,
+      message: "STRIPE_WEBHOOK_SECRET is not configured on the server.",
+    });
+  }
 
-  if (!sig || !webhookSecret) {
-    console.error("Stripe webhook: Missing signature or webhook secret configuration.");
+  if (!process.env.STRIPE_SECRET_KEY) {
+    console.error("[webhook] Missing required environment variable: STRIPE_SECRET_KEY");
+    return res.status(500).json({
+      success: false,
+      message: "STRIPE_SECRET_KEY is not configured on the server.",
+    });
+  }
+
+  const sig = req.headers["stripe-signature"];
+  if (!sig) {
+    console.error("[webhook] Missing stripe-signature header");
     return res.status(400).json({
       success: false,
-      message: "Missing Stripe signature or webhook secret configuration.",
+      message: "Missing stripe-signature header.",
+    });
+  }
+
+  // Ensure body is raw Buffer for cryptographic signature verification
+  if (!Buffer.isBuffer(req.body)) {
+    console.error("[webhook] body is not raw");
+    return res.status(400).json({
+      success: false,
+      message: "Webhook body is not raw",
     });
   }
 
   let event;
   try {
     const stripe = getStripe();
-    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
   } catch (err) {
-    console.error("Stripe webhook signature verification failed:", err.message);
+    console.error(`[webhook] signature failed: ${err.message}`);
     return res.status(400).json({
       success: false,
       message: `Webhook signature verification failed: ${err.message}`,
     });
   }
 
+  console.log(`[webhook] received ${event.type} ${event.id}`);
+
   try {
-    // Ensure active DB connection for webhook processing
+    // Ensure active DB connection for webhook processing in serverless
     await connectDB();
 
     switch (event.type) {
@@ -378,9 +430,10 @@ export async function handleStripeWebhook(req, res) {
         break;
     }
 
+    // Await all database work before sending response so serverless function does not exit early
     res.status(200).json({ received: true });
   } catch (err) {
-    console.error(`Stripe webhook error processing event "${event.type}":`, err.message);
+    console.error(`[webhook] failed: ${err.message}`);
     res.status(500).json({
       success: false,
       message: `Webhook handler failed: ${err.message}`,
