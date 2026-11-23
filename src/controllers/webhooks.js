@@ -70,7 +70,6 @@ async function handleCheckoutSessionCompleted(session) {
 
   const vendor = await findVendorForSubscription(vendorId, stripeSubId);
   if (!vendor) {
-    console.warn("Notice: checkout.session.completed - Vendor not found:", vendorId);
     return;
   }
 
@@ -80,8 +79,8 @@ async function handleCheckoutSessionCompleted(session) {
       const stripe = getStripe();
       const subscription = await stripe.subscriptions.retrieve(stripeSubId);
       periodEnd = getSubscriptionPeriodEnd(subscription);
-    } catch (subErr) {
-      console.warn("Notice: Failed to retrieve subscription from Stripe:", subErr.message);
+    } catch {
+      // Keep default period fallback
     }
   }
 
@@ -119,8 +118,9 @@ async function handleCheckoutSessionCompleted(session) {
       });
     }
   } catch (txErr) {
+    // Gracefully handle duplicate key race condition
     if (txErr.code !== 11000) {
-      console.warn("Notice: Transaction recording error:", txErr.message);
+      throw txErr;
     }
   }
 }
@@ -135,7 +135,6 @@ async function handleInvoicePaid(invoice) {
       ? invoice.subscription
       : invoice.subscription?.id;
 
-  // Only handle subscription renewals and recurring cycles
   if (!stripeSubId) return;
 
   const vendorId =
@@ -143,18 +142,14 @@ async function handleInvoicePaid(invoice) {
     invoice.metadata?.vendorId;
 
   const vendor = await findVendorForSubscription(vendorId, stripeSubId);
-  if (!vendor) {
-    console.warn("Notice: invoice.paid - Vendor not found for subscription:", stripeSubId);
-    return;
-  }
+  if (!vendor) return;
 
-  // Determine period end from subscription or invoice line item
   let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   try {
     const stripe = getStripe();
     const subscription = await stripe.subscriptions.retrieve(stripeSubId);
     periodEnd = getSubscriptionPeriodEnd(subscription);
-  } catch (err) {
+  } catch {
     const lineEnd = invoice.lines?.data?.[0]?.period?.end;
     if (lineEnd) periodEnd = new Date(lineEnd * 1000);
   }
@@ -162,7 +157,6 @@ async function handleInvoicePaid(invoice) {
   const usersCollection = getUsersCollection();
   const transactionsCollection = getTransactionsCollection();
 
-  // Extend vendor subscription
   await usersCollection.updateOne(
     { _id: vendor._id },
     {
@@ -175,7 +169,6 @@ async function handleInvoicePaid(invoice) {
     }
   );
 
-  // Idempotently record invoice payment transaction
   try {
     const existing = await transactionsCollection.findOne({
       stripeInvoiceId: invoice.id,
@@ -195,7 +188,7 @@ async function handleInvoicePaid(invoice) {
     }
   } catch (txErr) {
     if (txErr.code !== 11000) {
-      console.warn("Notice: Renewal transaction error:", txErr.message);
+      throw txErr;
     }
   }
 }
@@ -240,7 +233,7 @@ async function handleInvoicePaymentFailed(invoice) {
     }
   } catch (txErr) {
     if (txErr.code !== 11000) {
-      console.warn("Notice: Failed payment record error:", txErr.message);
+      throw txErr;
     }
   }
 }
@@ -258,7 +251,6 @@ async function handleSubscriptionDeleted(subscription) {
   const usersCollection = getUsersCollection();
   const servicesCollection = getServicesCollection();
 
-  // Reset to free plan
   await usersCollection.updateOne(
     { _id: vendor._id },
     {
@@ -271,7 +263,6 @@ async function handleSubscriptionDeleted(subscription) {
     }
   );
 
-  // Enforce free tier service limit: keep 3 newest non-rejected services active, deactivate the rest
   const vendorServices = await servicesCollection
     .find({
       vendorId: vendor._id.toString(),
@@ -365,7 +356,6 @@ export async function handleStripeWebhook(req, res, next) {
         break;
 
       default:
-        // Acknowledge other events cleanly
         break;
     }
 

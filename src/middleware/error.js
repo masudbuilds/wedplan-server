@@ -6,14 +6,20 @@ export function notFound(req, res, next) {
 }
 
 export function errorHandler(err, req, res, next) {
-  // If the status code was already set to an error code, keep it, otherwise default to 500
   const statusCode =
     res.statusCode && res.statusCode >= 400
       ? res.statusCode
       : err.status || err.statusCode || 500;
 
+  // Protect internal error details and driver messages in production mode
+  const isProd = process.env.NODE_ENV === "production";
+  const message =
+    statusCode === 500 && isProd
+      ? "Internal server error"
+      : err.message || "Internal server error";
+
   res.status(statusCode).json({
     success: false,
-    message: err.message || "Internal server error",
+    message,
   });
 }

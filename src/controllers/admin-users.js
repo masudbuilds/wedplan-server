@@ -198,8 +198,8 @@ export async function blockUser(req, res, next) {
           $or: [{ userId: targetUserIdStr }, { userId: targetUser._id }],
         }),
       ]);
-    } catch (sessionErr) {
-      console.warn("Notice: Session cleanup warning:", sessionErr.message);
+    } catch {
+      // Ignore session collection cleanup errors if collection does not exist yet
     }
 
     const updatedUser = await findUserById(id);
