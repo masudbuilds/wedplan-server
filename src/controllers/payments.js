@@ -15,6 +15,31 @@ import { getSubscriptionPeriodEnd } from "./webhooks.js";
  */
 export async function createCheckoutSession(req, res, next) {
   try {
+    // Check required environment variables upfront
+    if (!process.env.STRIPE_SECRET_KEY) {
+      console.error("[create-checkout-session] Missing required environment variable: STRIPE_SECRET_KEY");
+      return res.status(500).json({
+        success: false,
+        message: "STRIPE_SECRET_KEY is not configured on the server.",
+      });
+    }
+
+    if (!process.env.STRIPE_PRICE_ID) {
+      console.error("[create-checkout-session] Missing required environment variable: STRIPE_PRICE_ID");
+      return res.status(500).json({
+        success: false,
+        message: "STRIPE_PRICE_ID is not configured on the server.",
+      });
+    }
+
+    if (!process.env.CLIENT_URL) {
+      console.error("[create-checkout-session] Missing required environment variable: CLIENT_URL");
+      return res.status(500).json({
+        success: false,
+        message: "CLIENT_URL is not configured on the server.",
+      });
+    }
+
     // Prevent duplicate active subscriptions
     if (isPremium(req.user)) {
       return res.status(409).json({
@@ -24,24 +49,10 @@ export async function createCheckoutSession(req, res, next) {
     }
 
     const priceId = process.env.STRIPE_PRICE_ID;
-    if (!priceId) {
-      return res.status(500).json({
-        success: false,
-        message: "STRIPE_PRICE_ID is not configured on the server.",
-      });
-    }
-
     const stripe = getStripe();
-    const rawClientUrl = process.env.CLIENT_URL;
-    if (!rawClientUrl) {
-      return res.status(500).json({
-        success: false,
-        message: "CLIENT_URL is not configured on the server.",
-      });
-    }
 
     // Use primary origin for redirect URLs (trimmed of spaces and trailing slashes)
-    const primaryClientUrl = rawClientUrl
+    const primaryClientUrl = process.env.CLIENT_URL
       .split(",")[0]
       .trim()
       .replace(/\/+$/, "");
@@ -64,8 +75,8 @@ export async function createCheckoutSession(req, res, next) {
           vendorId: req.user.id,
         },
       },
-      success_url: `${clientUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${clientUrl}/payment/cancel`,
+      success_url: `${primaryClientUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${primaryClientUrl}/payment/cancel`,
     });
 
     res.json({
@@ -73,6 +84,11 @@ export async function createCheckoutSession(req, res, next) {
       url: session.url,
     });
   } catch (error) {
+    console.error("[create-checkout-session] failed:", {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+    });
     next(error);
   }
 }

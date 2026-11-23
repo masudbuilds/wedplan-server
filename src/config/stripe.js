@@ -4,15 +4,15 @@ let stripeClient = null;
 
 /**
  * Returns a cached singleton instance of the Stripe SDK.
- * Reads STRIPE_SECRET_KEY strictly from environment variables.
+ * Initialized lazily on demand so module loading never crashes if env is unset at import time.
  */
 export function getStripe() {
   if (!stripeClient) {
     const key = process.env.STRIPE_SECRET_KEY;
-    if (!key) {
+    if (!key || typeof key !== "string" || !key.trim()) {
       throw new Error("STRIPE_SECRET_KEY is not configured in environment variables.");
     }
-    stripeClient = new Stripe(key);
+    stripeClient = new Stripe(key.trim());
   }
   return stripeClient;
 }
