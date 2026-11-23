@@ -57,17 +57,7 @@ app.get("/", (req, res) => {
 // Health check endpoint (load balancers ping this before DB connection)
 app.use("/api/health", healthRoutes);
 
-// 1. Stripe webhook route mounted BEFORE express.json() with raw body parsing
-app.use(
-  "/api/webhooks",
-  express.raw({ type: "application/json" }),
-  webhooksRoutes
-);
-
-// 2. General JSON body parsing for all other routes
-app.use(express.json());
-
-// 3. Lazy database connection helper for serverless cold-start readiness
+// Database connection helper for serverless cold-start readiness (runs for all API routes)
 app.use(async (req, res, next) => {
   try {
     if (process.env.MONGODB_URI) {
@@ -78,6 +68,16 @@ app.use(async (req, res, next) => {
     next(err);
   }
 });
+
+// 1. Stripe webhook route mounted BEFORE express.json() with raw body parsing
+app.use(
+  "/api/webhooks",
+  express.raw({ type: "application/json" }),
+  webhooksRoutes
+);
+
+// 2. General JSON body parsing for all other routes
+app.use(express.json());
 
 // Mount public routes
 app.use("/api/categories", categoriesRoutes);
