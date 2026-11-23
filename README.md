@@ -154,6 +154,17 @@ stripe listen --forward-to localhost:5000/api/webhooks/stripe --events checkout.
 ```
 Copy the printed webhook signing secret (`whsec_...`) into your `.env` file as `STRIPE_WEBHOOK_SECRET`.
 
+### 3. Testing Webhooks Locally Without Real Payments
+To test the webhook handler locally without going through the browser checkout flow, trigger events directly via the Stripe CLI:
+```bash
+# Trigger a test checkout completion event
+stripe trigger checkout.session.completed
+
+# Trigger a subscription renewal invoice event
+stripe trigger invoice.paid
+```
+The local server will receive the event at `POST /api/webhooks/stripe`, verify the signature with your local `STRIPE_WEBHOOK_SECRET`, and execute the database updates.
+
 ---
 
 ## API Documentation
