@@ -7,8 +7,10 @@ let jwks = null;
 
 function getJWKS() {
   if (!jwks) {
-    const jwksUrlString =
-      process.env.BETTER_AUTH_JWKS_URL || "http://localhost:3000/api/auth/jwks";
+    const jwksUrlString = process.env.BETTER_AUTH_JWKS_URL;
+    if (!jwksUrlString) {
+      throw new Error("BETTER_AUTH_JWKS_URL is not configured on the server.");
+    }
     jwks = createRemoteJWKSet(new URL(jwksUrlString));
   }
   return jwks;
@@ -30,13 +32,12 @@ export async function verifyToken(req, res, next) {
     }
 
     const token = authHeader.split(" ")[1];
-    const issuer = process.env.BETTER_AUTH_ISSUER || "http://localhost:3000";
+    const issuer = process.env.BETTER_AUTH_ISSUER;
 
     let payload;
     try {
-      const verifyResult = await jwtVerify(token, getJWKS(), {
-        issuer,
-      });
+      const verifyOptions = issuer ? { issuer } : {};
+      const verifyResult = await jwtVerify(token, getJWKS(), verifyOptions);
       payload = verifyResult.payload;
     } catch (jwtErr) {
       return res.status(401).json({

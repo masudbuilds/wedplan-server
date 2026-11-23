@@ -32,7 +32,13 @@ export async function createCheckoutSession(req, res, next) {
     }
 
     const stripe = getStripe();
-    const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+    const clientUrl = process.env.CLIENT_URL;
+    if (!clientUrl) {
+      return res.status(500).json({
+        success: false,
+        message: "CLIENT_URL is not configured on the server.",
+      });
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
