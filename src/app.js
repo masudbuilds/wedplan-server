@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import { connectDB } from "./config/db.js";
 import { notFound, errorHandler } from "./middleware/error.js";
 import healthRoutes from "./routes/health.js";
 import categoriesRoutes from "./routes/categories.js";
@@ -22,13 +23,17 @@ const app = express();
 // Security headers
 app.use(helmet());
 
-// CORS configuration: allow only CLIENT_URL with credentials and Authorization header
-const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+// CORS configuration: support comma-separated list of allowed client origins (e.g., production domain + localhost)
+const rawClientUrls = process.env.CLIENT_URL || "http://localhost:3000";
+const allowedOrigins = rawClientUrls
+  .split(",")
+  .map((url) => url.trim().replace(/\/$/, ""));
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, Stripe, or curl) or matching clientUrl
-      if (!origin || origin === clientUrl) {
+      // Allow requests with no origin (like mobile apps, Stripe webhooks, or server-to-server) or matching allowed origins
+      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
@@ -49,6 +54,24 @@ app.use(
 
 // 2. General JSON body parsing for all other routes
 app.use(express.json());
+
+// 3. Lazy database connection helper for serverless cold-start readiness
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Root route (prevents 404 on base path)
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "WedPlan API Server is running",
+  });
+});
 
 // Mount public routes
 app.use("/api/health", healthRoutes);
