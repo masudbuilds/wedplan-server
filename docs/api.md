@@ -4,9 +4,17 @@ This document describes all API endpoints implemented in the **WedPlan Server**.
 
 ---
 
-## Base URL
+## Base URLs & Production Endpoints
 
-Local Development: `http://localhost:5000/api`
+- **Live Server (API)**: `https://wedplan-server-qkjk.onrender.com/api`
+- **Health Check URL**: `https://wedplan-server-qkjk.onrender.com/api/health`
+- **Stripe Webhook Endpoint**: `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
+- **Local Development**: `http://localhost:5000/api`
+
+### Production Environment Variables
+- `CLIENT_URL` = `https://wedplan-client-pearl.vercel.app`
+- `BETTER_AUTH_JWKS_URL` = `https://wedplan-client-pearl.vercel.app/api/auth/jwks`
+- `BETTER_AUTH_ISSUER` = `https://wedplan-client-pearl.vercel.app`
 
 ---
 
@@ -196,14 +204,15 @@ Returns the vendor's active plan, subscription expiry, cancellation schedule, an
 ### 5. Stripe Webhook Listener
 
 #### `POST /api/webhooks/stripe`
-Receives raw event payloads directly from Stripe.
+- **Live Production URL**: `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
+- **Description**: Receives raw event payloads directly from Stripe.
 - **Authentication**: Verified cryptographically with `stripe.webhooks.constructEvent` using `STRIPE_WEBHOOK_SECRET` and the `stripe-signature` header.
-- **Handled Events**:
-  - `checkout.session.completed`: Activates Premium in DB and writes transaction.
-  - `invoice.paid`: Extends subscription period for renewals and logs renewal transaction.
-  - `invoice.payment_failed`: Logs failed transaction without extending access.
-  - `customer.subscription.deleted`: Downgrades vendor to "free" and deactivates services exceeding the free plan limit (retains the 3 newest non-rejected services).
-  - `customer.subscription.updated`: Keeps `subscriptionExpiresAt` and `cancelAtPeriodEnd` in sync.
+- **Handled Events (5)**:
+  1. `checkout.session.completed`: Activates Premium in DB and writes transaction.
+  2. `invoice.paid`: Extends subscription period for renewals and logs renewal transaction.
+  3. `invoice.payment_failed`: Logs failed transaction without extending access.
+  4. `customer.subscription.updated`: Keeps `subscriptionExpiresAt` and `cancelAtPeriodEnd` in sync.
+  5. `customer.subscription.deleted`: Downgrades vendor to "free" and deactivates services exceeding the free plan limit (retains the 3 newest non-rejected services).
 - **Response**: `200 OK` (`{ "received": true }`).
 
 ---

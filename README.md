@@ -8,10 +8,12 @@ Built with **Node.js 20+**, **Express.js**, the official **MongoDB driver** (no 
 
 ## Repository Links & Live URLs
 
-- **Live Server URL**: `https://wedplan-server.example.com` *(Placeholder: replace with your deployed server domain)*
-- **Live Client URL**: `https://wedplan.example.com` *(Placeholder: replace with your deployed frontend domain)*
-- **Server Repository**: `https://github.com/your-username/wedplan-server` *(Placeholder: replace with your server repo URL)*
-- **Client Repository**: `https://github.com/your-username/wedplan-client` *(Placeholder: replace with your client repo URL)*
+- **Live Server URL (API)**: `https://wedplan-server-qkjk.onrender.com`
+- **Health Check URL**: `https://wedplan-server-qkjk.onrender.com/api/health`
+- **Live Client URL (Frontend)**: `https://wedplan-client-pearl.vercel.app`
+- **Stripe Webhook Endpoint**: `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
+- **Server Repository**: `https://github.com/iammasudrn/wedplan-server`
+- **Client Repository**: `https://github.com/iammasudrn/wedplan-client`
 
 ---
 
@@ -58,16 +60,21 @@ Copy `.env.example` to `.env` in the server root. Never commit `.env` to Git.
 
 ---
 
-## Required Production Application URLs
+## Production Environment Variables & Deployment URLs
 
-When deploying WedPlan to production, configure the following URLs:
+When deploying WedPlan to production, configure the following environment variables:
 
-1. **Better Auth JWKS URL**:
-   `https://<client-domain>/api/auth/jwks`
-2. **Better Auth Issuer**:
-   `https://<client-domain>`
+- **CLIENT_URL** = `https://wedplan-client-pearl.vercel.app`
+- **BETTER_AUTH_JWKS_URL** = `https://wedplan-client-pearl.vercel.app/api/auth/jwks`
+- **BETTER_AUTH_ISSUER** = `https://wedplan-client-pearl.vercel.app`
+
+### Production Endpoints
+1. **Live Server Base URL**:
+   `https://wedplan-server-qkjk.onrender.com`
+2. **Server Health Check Endpoint**:
+   `https://wedplan-server-qkjk.onrender.com/api/health`
 3. **Stripe Webhook Endpoint**:
-   `https://<server-domain>/api/webhooks/stripe`
+   `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
    - **Required Production Webhook Events (5)**:
      1. `checkout.session.completed`
      2. `invoice.paid`

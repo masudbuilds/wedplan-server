@@ -24,17 +24,24 @@ const app = express();
 // Security headers
 app.use(helmet());
 
-// CORS configuration: support comma-separated list of allowed client origins from CLIENT_URL
+// CORS configuration: reads CLIENT_URL from env, supports comma-separated list, trims spaces & trailing slashes
 const rawClientUrls = process.env.CLIENT_URL || "";
 const allowedOrigins = rawClientUrls
-  ? rawClientUrls.split(",").map((url) => url.trim().replace(/\/$/, ""))
-  : [];
+  .split(",")
+  .map((url) => url.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (like mobile apps, Stripe webhooks, or server-to-server) or matching allowed origins
-      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+      if (
+        !origin ||
+        allowedOrigins.length === 0 ||
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.includes(origin.replace(/\/+$/, "")) ||
+        allowedOrigins.includes("*")
+      ) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
