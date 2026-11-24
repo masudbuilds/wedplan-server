@@ -142,54 +142,13 @@ function getTransactionsCollection() {
 }
 
 // ============================================================================
-// 3. EXPRESS APP INITIALIZATION, HELMET & CORS
+// 3. EXPRESS APP INITIALIZATION
 // ============================================================================
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(helmet());
-
-const rawClientUrls = process.env.CLIENT_URL || "";
-const allowedOrigins = rawClientUrls
-  .split(",")
-  .map((url) => url.trim().replace(/\/+$/, ""))
-  .filter(Boolean);
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.length === 0 ||
-        allowedOrigins.includes(origin) ||
-        allowedOrigins.includes(origin.replace(/\/+$/, "")) ||
-        allowedOrigins.includes("*")
-      ) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization", "stripe-signature"],
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  })
-);
-
-// Database connection helper for serverless warm starts
-app.use(async (req, res, next) => {
-  try {
-    if (process.env.MONGODB_URI) {
-      await connectToMongoDB();
-    }
-    next();
-  } catch (err) {
-    next(err);
-  }
-});
-
 // ============================================================================
-// 4. STRIPE WEBHOOK HANDLER (MOUNTED BEFORE express.json())
+// 4. STRIPE WEBHOOK ROUTE (FIRST ROUTE - MUST BE BEFORE ANY BODY PARSER/MIDDLEWARE)
 // ============================================================================
 function getSubscriptionPeriodEnd(subscription) {
   const timestamp =
@@ -240,7 +199,10 @@ async function handleCheckoutSessionCompleted(session) {
     typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
 
   const vendor = await findVendorForSubscription(vendorId, stripeSubId);
-  if (!vendor) return;
+  if (!vendor) {
+    console.log(`[webhook] vendor not found for id ${vendorId}`);
+    return;
+  }
 
   let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   if (stripeSubId) {
@@ -268,12 +230,14 @@ async function handleCheckoutSessionCompleted(session) {
       },
     }
   );
+  console.log(`[webhook] premium activated for vendor ${vendorId}`);
 
   const transactionsCollection = getTransactionsCollection();
   const existingTx = await transactionsCollection.findOne({ stripeSessionId: session.id });
   if (!existingTx) {
     await transactionsCollection.insertOne({
       vendorId: vendor._id.toString(),
+      plan: "premium",
       amount: (session.amount_total || 0) / 100,
       currency: (session.currency || "usd").toUpperCase(),
       status: TRANSACTION_STATUS.COMPLETED,
@@ -282,6 +246,7 @@ async function handleCheckoutSessionCompleted(session) {
       stripeSubscriptionId: stripeSubId || null,
       createdAt: new Date(),
     });
+    console.log(`[webhook] transaction saved for session ${session.id}`);
   }
 }
 
@@ -323,6 +288,7 @@ async function handleInvoicePaid(invoice) {
   if (!existingTx) {
     await transactionsCollection.insertOne({
       vendorId: vendor._id.toString(),
+      plan: "premium",
       amount: (invoice.amount_paid || 0) / 100,
       currency: (invoice.currency || "usd").toUpperCase(),
       status: TRANSACTION_STATUS.COMPLETED,
@@ -331,6 +297,7 @@ async function handleInvoicePaid(invoice) {
       stripeSubscriptionId: stripeSubId,
       createdAt: new Date(),
     });
+    console.log(`[webhook] transaction saved for session ${invoice.id}`);
   }
 }
 
@@ -421,6 +388,7 @@ async function handleSubscriptionUpdated(subscription) {
   );
 }
 
+// Stripe webhook route: FIRST route on app, using express.raw directly
 app.post(
   "/api/webhooks/stripe",
   express.raw({ type: "application/json" }),
@@ -451,7 +419,7 @@ app.post(
     }
 
     if (!Buffer.isBuffer(req.body)) {
-      console.error("[webhook] body is not raw");
+      console.error(`[webhook] body is not raw, type: ${typeof req.body}`);
       return res.status(400).json({
         success: false,
         message: "Webhook body is not raw",
@@ -473,6 +441,8 @@ app.post(
         message: `Webhook signature verification failed: ${err.message}`,
       });
     }
+
+    console.log(`[webhook] received ${event.type} ${event.id}`);
 
     try {
       await connectToMongoDB();
@@ -508,8 +478,52 @@ app.post(
   }
 );
 
+// ============================================================================
+// 5. GENERAL MIDDLEWARE (HELMET, CORS, JSON BODY PARSER & DB HELPER)
+// ============================================================================
+app.use(helmet());
+
+const rawClientUrls = process.env.CLIENT_URL || "";
+const allowedOrigins = rawClientUrls
+  .split(",")
+  .map((url) => url.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (
+        !origin ||
+        allowedOrigins.length === 0 ||
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.includes(origin.replace(/\/+$/, "")) ||
+        allowedOrigins.includes("*")
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "stripe-signature"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  })
+);
+
 // Mount express.json() for all subsequent routes
 app.use(express.json());
+
+// Database connection helper for serverless warm starts on general routes
+app.use(async (req, res, next) => {
+  try {
+    if (process.env.MONGODB_URI) {
+      await connectToMongoDB();
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ============================================================================
 // 5. AUTHENTICATION & AUTHORIZATION MIDDLEWARE
