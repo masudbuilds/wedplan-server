@@ -6,9 +6,9 @@ This document describes all API endpoints implemented in the **WedPlan Server**.
 
 ## Base URLs & Production Endpoints
 
-- **Live Server (API)**: `https://wedplan-server-qkjk.onrender.com/api`
-- **Health Check URL**: `https://wedplan-server-qkjk.onrender.com/api/health`
-- **Stripe Webhook Endpoint**: `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
+- **Live Server (API)**: `https://wedplan-server-ruddy.vercel.app/api`
+- **Health Check URL**: `https://wedplan-server-ruddy.vercel.app/api/health`
+- **Stripe Webhook Endpoint**: `https://wedplan-server-ruddy.vercel.app/api/webhooks/stripe`
 - **Local Development**: `http://localhost:5000/api`
 
 ### Production Environment Variables
@@ -204,7 +204,7 @@ Returns the vendor's active plan, subscription expiry, cancellation schedule, an
 ### 5. Stripe Webhook Listener
 
 #### `POST /api/webhooks/stripe`
-- **Live Production URL**: `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
+- **Live Production URL**: `https://wedplan-server-ruddy.vercel.app/api/webhooks/stripe`
 - **Description**: Receives raw event payloads directly from Stripe.
 - **Authentication**: Verified cryptographically with `stripe.webhooks.constructEvent` using `STRIPE_WEBHOOK_SECRET` and the `stripe-signature` header.
 - **Handled Events (5)**:

@@ -8,12 +8,12 @@ Built with **Node.js 20+**, **Express.js**, the official **MongoDB driver** (no 
 
 ## Repository Links & Live URLs
 
-- **Live Server URL (API)**: `https://wedplan-server-qkjk.onrender.com`
-- **Health Check URL**: `https://wedplan-server-qkjk.onrender.com/api/health`
+- **Live Server URL (API)**: `https://wedplan-server-ruddy.vercel.app`
+- **Health Check URL**: `https://wedplan-server-ruddy.vercel.app/api/health`
 - **Live Client URL (Frontend)**: `https://wedplan-client-pearl.vercel.app`
-- **Stripe Webhook Endpoint**: `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
-- **Server Repository**: `https://github.com/iammasudrn/wedplan-server`
-- **Client Repository**: `https://github.com/iammasudrn/wedplan-client`
+- **Stripe Webhook Endpoint**: `https://wedplan-server-ruddy.vercel.app/api/webhooks/stripe`
+- **Server Repository**: `https://github.com/masudbuilds/wedplan-server`
+- **Client Repository**: `https://github.com/masudbuilds/wedplan-client`
 
 ---
 
@@ -60,39 +60,27 @@ Copy `.env.example` to `.env` in the server root. Never commit `.env` to Git.
 
 ---
 
-## Production Environment Variables & Deployment URLs
+## Required Application URLs & Production Endpoints
 
-When deploying WedPlan to production, configure the following environment variables:
+Configure the following environment variables in production:
 
-- **CLIENT_URL** = `https://wedplan-client-pearl.vercel.app`
-- **BETTER_AUTH_JWKS_URL** = `https://wedplan-client-pearl.vercel.app/api/auth/jwks`
-- **BETTER_AUTH_ISSUER** = `https://wedplan-client-pearl.vercel.app`
+- `CLIENT_URL` = `https://wedplan-client-pearl.vercel.app`
+- `BETTER_AUTH_JWKS_URL` = `https://wedplan-client-pearl.vercel.app/api/auth/jwks`
+- `BETTER_AUTH_ISSUER` = `https://wedplan-client-pearl.vercel.app`
 
 ### Production Endpoints
 1. **Live Server Base URL**:
-   `https://wedplan-server-qkjk.onrender.com`
+   `https://wedplan-server-ruddy.vercel.app`
 2. **Server Health Check Endpoint**:
-   `https://wedplan-server-qkjk.onrender.com/api/health`
+   `https://wedplan-server-ruddy.vercel.app/api/health`
 3. **Stripe Webhook Endpoint**:
-   `https://wedplan-server-qkjk.onrender.com/api/webhooks/stripe`
+   `https://wedplan-server-ruddy.vercel.app/api/webhooks/stripe`
    - **Required Production Webhook Events (5)**:
      1. `checkout.session.completed`
      2. `invoice.paid`
      3. `invoice.payment_failed`
      4. `customer.subscription.updated`
      5. `customer.subscription.deleted`
-
----
-
-## Deployment Recommendation (Render vs. Vercel)
-
-For hosting the WedPlan server and handling Stripe Webhooks, a **standard persistent Node.js host (such as Render or Railway) is strongly recommended** over serverless platforms (like Vercel functions):
-
-1. **Reliable Raw Body Buffering**: Stripe webhook signature verification (`stripe.webhooks.constructEvent`) requires the exact byte-for-byte raw HTTP request payload. Standard Node.js hosts pass the unadulterated stream directly to `express.raw()`, eliminating serverless body-mangling issues.
-2. **Persistent Database Connections**: A continuous Node process maintains a cached `MongoClient` connection pool, preventing connection exhaustion and eliminating cold-start latency spikes.
-3. **No Webhook Timeout Drops**: Stripe requires webhook responses within 10 seconds. Serverless cold boots can cause timeouts and unnecessary webhook retries.
-
-> **Serverless Compatibility**: If deploying to Vercel, a pre-configured `vercel.json` and `api/index.js` serverless handler are already included in this repository.
 
 ---
 
