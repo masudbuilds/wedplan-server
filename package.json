@@ -3,12 +3,10 @@
   "version": "1.0.0",
   "description": "Express.js backend for WedPlan wedding planning platform",
   "type": "module",
-  "main": "src/server.js",
+  "main": "index.js",
   "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
-    "make-admin": "node scripts/make-admin.js",
-    "seed": "node scripts/seed-services.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
