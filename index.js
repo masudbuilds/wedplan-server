@@ -162,7 +162,7 @@ function getSubscriptionPeriodEnd(subscription) {
   return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 }
 
-async function findVendorForSubscription(vendorId, stripeSubId) {
+async function findVendorForSubscription(vendorId, stripeSubId, email) {
   const usersCollection = getUsersCollection();
   if (vendorId) {
     const byId = await usersCollection.findOne({
@@ -186,6 +186,17 @@ async function findVendorForSubscription(vendorId, stripeSubId) {
       return bySub;
     }
   }
+
+  if (email) {
+    const byEmail = await usersCollection.findOne({
+      email: email.toLowerCase().trim(),
+      role: USER_ROLES.VENDOR,
+    });
+    if (byEmail) {
+      return byEmail;
+    }
+  }
+
   return null;
 }
 
@@ -197,8 +208,9 @@ async function handleCheckoutSessionCompleted(session) {
   const vendorId = session.metadata?.vendorId || session.client_reference_id;
   const stripeSubId =
     typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+  const customerEmail = session.customer_email || session.customer_details?.email;
 
-  const vendor = await findVendorForSubscription(vendorId, stripeSubId);
+  const vendor = await findVendorForSubscription(vendorId, stripeSubId, customerEmail);
   if (!vendor) {
     console.log(`[webhook] vendor not found for id ${vendorId}`);
     return;
@@ -607,6 +619,7 @@ async function verifyToken(req, res, next) {
       role: user.role || "customer",
       subscriptionPlan: user.subscriptionPlan || "free",
       subscriptionExpiresAt: user.subscriptionExpiresAt || null,
+      isPremium: isPremium(user),
     };
 
     next();
@@ -638,13 +651,19 @@ const verifyVendor = requireRole(USER_ROLES.VENDOR);
 const verifyAdmin = requireRole(USER_ROLES.ADMIN);
 
 function isPremium(user) {
-  if (!user || user.subscriptionPlan !== "premium") {
+  if (!user) return false;
+  const plan = (user.subscriptionPlan || "").toString().toLowerCase().trim();
+  if (plan !== "premium") {
     return false;
   }
   if (!user.subscriptionExpiresAt) {
     return true;
   }
-  return new Date(user.subscriptionExpiresAt) > new Date();
+  const expiryTime = new Date(user.subscriptionExpiresAt).getTime();
+  if (Number.isNaN(expiryTime)) {
+    return true;
+  }
+  return expiryTime > Date.now();
 }
 
 function validateObjectIdParam(paramName = "id") {
@@ -781,6 +800,44 @@ app.get("/api/categories", (req, res) => {
   });
 });
 
+// Helper: Enriches service documents with vendor details and isPremium status
+async function enrichServicesWithVendors(rawServices) {
+  if (!rawServices || rawServices.length === 0) return [];
+  const usersCollection = getUsersCollection();
+  const vendorIds = [...new Set(rawServices.map((s) => s.vendorId).filter(Boolean))];
+  const vendorConditions = [];
+  for (const vid of vendorIds) {
+    vendorConditions.push({ _id: vid }, { id: vid });
+    if (ObjectId.isValid(vid)) vendorConditions.push({ _id: new ObjectId(vid) });
+  }
+  const vendors =
+    vendorConditions.length > 0
+      ? await usersCollection.find({ $or: vendorConditions }).toArray()
+      : [];
+  const vendorMap = new Map();
+  for (const v of vendors) {
+    if (v._id) vendorMap.set(v._id.toString(), v);
+    if (v.id) vendorMap.set(v.id, v);
+  }
+
+  return rawServices.map((s) => {
+    const v = vendorMap.get(s.vendorId);
+    const vendorPremium = isPremium(v);
+    return {
+      ...s,
+      id: s._id.toString(),
+      isPremium: vendorPremium,
+      vendor: {
+        id: v?._id?.toString() || v?.id || s.vendorId,
+        name: v?.name || "Wedding Artisan",
+        businessName: v?.businessName || v?.name || "Wedding Artisan",
+        image: v?.image || "",
+        isPremium: vendorPremium,
+      },
+    };
+  });
+}
+
 // GET /api/services
 app.get("/api/services", async (req, res, next) => {
   try {
@@ -839,10 +896,7 @@ app.get("/api/services", async (req, res, next) => {
       .limit(limitNum)
       .toArray();
 
-    const services = rawServices.map((s) => ({
-      ...s,
-      id: s._id.toString(),
-    }));
+    const services = await enrichServicesWithVendors(rawServices);
 
     res.json({
       success: true,
@@ -871,10 +925,7 @@ app.get("/api/services/featured", async (req, res, next) => {
       .limit(6)
       .toArray();
 
-    const services = rawServices.map((s) => ({
-      ...s,
-      id: s._id.toString(),
-    }));
+    const services = await enrichServicesWithVendors(rawServices);
 
     res.json({
       success: true,
@@ -921,26 +972,33 @@ app.get("/api/services/:id", validateObjectIdParam("id"), async (req, res, next)
           name: 1,
           businessName: 1,
           image: 1,
+          subscriptionPlan: 1,
+          subscriptionExpiresAt: 1,
         },
       }
     );
+
+    const vendorIsPrem = isPremium(vendor);
 
     res.json({
       success: true,
       service: {
         ...service,
         id: service._id.toString(),
+        isPremium: vendorIsPrem,
         vendor: vendor
           ? {
               id: vendor._id?.toString() || vendor.id,
               name: vendor.name,
               businessName: vendor.businessName || vendor.name,
               image: vendor.image || "",
+              isPremium: vendorIsPrem,
             }
           : {
               name: "WedPlan Verified Partner",
               businessName: "WedPlan Verified Partner",
               image: "",
+              isPremium: false,
             },
       },
     });
@@ -954,11 +1012,39 @@ app.get("/api/services/:id", validateObjectIdParam("id"), async (req, res, next)
 // ============================================================================
 
 // GET /api/me
-app.get("/api/me", verifyToken, (req, res) => {
-  res.json({
-    success: true,
-    user: req.user,
-  });
+app.get("/api/me", verifyToken, async (req, res, next) => {
+  try {
+    const usersCollection = getUsersCollection();
+    const user = await usersCollection.findOne({
+      $or: [
+        { _id: req.user.id },
+        { id: req.user.id },
+        ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+      ],
+    });
+
+    const currentUser = user || req.user;
+    const userIsPrem = isPremium(currentUser);
+
+    res.json({
+      success: true,
+      user: {
+        id: currentUser._id?.toString() || req.user.id,
+        name: currentUser.name,
+        email: currentUser.email,
+        role: currentUser.role || "customer",
+        businessName: currentUser.businessName || undefined,
+        image: currentUser.image || undefined,
+        subscriptionPlan: currentUser.subscriptionPlan || "free",
+        subscriptionExpiresAt: currentUser.subscriptionExpiresAt || null,
+        isPremium: userIsPrem,
+        isBlocked: Boolean(currentUser.isBlocked),
+        createdAt: currentUser.createdAt || undefined,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // ============================================================================
@@ -1352,6 +1438,18 @@ app.get("/api/vendor/stats", verifyToken, verifyVendor, async (req, res, next) =
   try {
     const servicesCollection = getServicesCollection();
     const bookingsCollection = getBookingsCollection();
+    const usersCollection = getUsersCollection();
+
+    const vendor = await usersCollection.findOne({
+      $or: [
+        { _id: req.user.id },
+        { id: req.user.id },
+        ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+      ],
+    });
+
+    const effectiveVendor = vendor || req.user;
+    const vendorIsPremium = isPremium(effectiveVendor);
 
     const [totalServices, activeServices, totalBookings, pendingBookings, acceptedBookings] =
       await Promise.all([
@@ -1403,6 +1501,9 @@ app.get("/api/vendor/stats", verifyToken, verifyVendor, async (req, res, next) =
         pendingBookings,
         acceptedBookings,
         earnings,
+        subscriptionPlan: effectiveVendor.subscriptionPlan || "free",
+        isPremium: vendorIsPremium,
+        subscriptionExpiresAt: effectiveVendor.subscriptionExpiresAt || null,
       },
     });
   } catch (error) {
@@ -1473,24 +1574,54 @@ app.get("/api/vendor/subscription", verifyToken, verifyVendor, async (req, res, 
       }
     }
 
+    const effectiveVendor = vendor || req.user;
+    const vendorIsPremium = isPremium(effectiveVendor);
+    const plan = effectiveVendor.subscriptionPlan || "free";
+    const subscriptionExpiresAt = effectiveVendor.subscriptionExpiresAt || null;
+    const cancelAtPeriodEnd = Boolean(effectiveVendor.cancelAtPeriodEnd);
+    const hasStripeSubscription = Boolean(effectiveVendor.stripeSubscriptionId);
+
+    // Build comprehensive vendor conditions for transaction lookup
+    const vendorIdConditions = [
+      { vendorId: req.user.id },
+      ...(ObjectId.isValid(req.user.id) ? [{ vendorId: new ObjectId(req.user.id) }] : []),
+    ];
+    if (vendor?._id) {
+      const vidStr = vendor._id.toString();
+      vendorIdConditions.push({ vendorId: vidStr });
+      if (ObjectId.isValid(vendor._id)) {
+        vendorIdConditions.push({ vendorId: new ObjectId(vendor._id) });
+      }
+    }
+    if (vendor?.id && vendor.id !== req.user.id) {
+      vendorIdConditions.push({ vendorId: vendor.id });
+    }
+
     const transactions = await transactionsCollection
-      .find({ vendorId: req.user.id })
+      .find({ $or: vendorIdConditions })
       .sort({ createdAt: -1 })
       .toArray();
 
+    const formattedTransactions = transactions.map((t) => ({
+      ...t,
+      id: t._id.toString(),
+      vendorId: t.vendorId?.toString?.() || t.vendorId,
+    }));
+
+    const subscriptionPayload = {
+      plan,
+      isPremium: vendorIsPremium,
+      subscriptionExpiresAt,
+      expiresAt: subscriptionExpiresAt,
+      cancelAtPeriodEnd,
+      hasStripeSubscription,
+      transactions: formattedTransactions,
+    };
+
     res.json({
       success: true,
-      subscription: {
-        plan: vendor?.subscriptionPlan || "free",
-        expiresAt: vendor?.subscriptionExpiresAt || null,
-        cancelAtPeriodEnd: Boolean(vendor?.cancelAtPeriodEnd),
-        isPremium: isPremium(vendor),
-        hasStripeSubscription: Boolean(vendor?.stripeSubscriptionId),
-        transactions: transactions.map((t) => ({
-          ...t,
-          id: t._id.toString(),
-        })),
-      },
+      ...subscriptionPayload,
+      subscription: subscriptionPayload,
     });
   } catch (error) {
     next(error);
@@ -2065,12 +2196,16 @@ app.get("/api/payments/session-status", verifyToken, verifyVendor, async (req, r
       vendor = await usersCollection.findOne({ _id: vendor._id });
     }
 
+    const effectiveVendor = vendor || req.user;
+    const vendorIsPrem = isPremium(effectiveVendor);
+
     res.json({
       success: true,
       status: session.status,
       payment_status: session.payment_status,
-      isPremium: isPremium(vendor),
-      subscriptionExpiresAt: vendor?.subscriptionExpiresAt || null,
+      paymentStatus: session.payment_status,
+      isPremium: vendorIsPrem,
+      subscriptionExpiresAt: effectiveVendor?.subscriptionExpiresAt || null,
     });
   } catch (error) {
     next(error);
