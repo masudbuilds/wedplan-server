@@ -34,7 +34,7 @@ Built with **Node.js 20+**, **Express.js**, the official **MongoDB driver** (no 
 
 - **Runtime**: Node.js v20+ (ES Modules)
 - **Framework**: Express.js 5
-- **Database**: MongoDB (Official `mongodb` Node.js driver v6+)
+- **Database**: MongoDB (Official `mongodb` Node.js driver v7+)
 - **Authentication**: `jose` (JWT verification with remote JWKS)
 - **Payments**: Stripe Node SDK (Checkout sessions & signature-verified webhooks)
 - **Security**: `helmet` security headers, strict `cors` policies, MongoDB parameterization, regex escaping
@@ -43,16 +43,16 @@ Built with **Node.js 20+**, **Express.js**, the official **MongoDB driver** (no 
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` in the server root. Never commit `.env` to Git.
+Configure environment variables in a `.env` file in the server root. Never commit `.env` to Git.
 
 | Variable | Description |
 |---|---|
 | `PORT` | Local port number for Express server to listen on (default `5000`) |
 | `MONGODB_URI` | MongoDB connection string (local or MongoDB Atlas connection URI) |
 | `DB_NAME` | MongoDB database name (e.g. `wedplan`) |
-| `CLIENT_URL` | Whitelisted client origin(s) for CORS (supports comma-separated list, e.g. `http://localhost:3000,https://wedplan.example.com`) |
-| `BETTER_AUTH_JWKS_URL` | Remote JWKS public keys endpoint on the Next.js client (e.g. `http://localhost:3000/api/auth/jwks`) |
-| `BETTER_AUTH_ISSUER` | Expected JWT issuer claim issued by Better Auth (e.g. `http://localhost:3000`) |
+| `CLIENT_URL` | Whitelisted client origin(s) for CORS (supports comma-separated list, e.g. `http://localhost:3000,https://wedplan-client-pearl.vercel.app`) |
+| `BETTER_AUTH_JWKS_URL` | Remote JWKS public keys endpoint on the Next.js client (e.g. `https://wedplan-client-pearl.vercel.app/api/auth/jwks`) |
+| `BETTER_AUTH_ISSUER` | Expected JWT issuer claim issued by Better Auth (e.g. `https://wedplan-client-pearl.vercel.app`) |
 | `STRIPE_SECRET_KEY` | Stripe secret API key (`sk_test_...`) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
 | `STRIPE_PRICE_ID` | Recurring Stripe Price ID for vendor Premium subscription (`price_...`) |
@@ -92,34 +92,15 @@ npm install
 ```
 
 ### 2. Configure Environment
-Create `.env` based on `.env.example`:
-```bash
-cp .env.example .env
-```
+Create a `.env` file in the root directory based on the environment variables table above.
 
-### 3. Seed Sample Approved Services
-Inserts 8 sample wedding services across all 6 categories into MongoDB. Optionally link them to an existing registered vendor:
-```bash
-# Seed with placeholder vendor IDs:
-npm run seed
-
-# Or link sample services to a registered vendor email:
-npm run seed -- vendor@example.com
-```
-
-### 4. Create an Administrator Account
-Administrators are **never** created via public registration. To promote an existing registered user to the Admin role:
-```bash
-npm run make-admin -- admin@example.com
-```
-
-### 5. Start Development Server
+### 3. Start Development Server
 Runs with Node's native file-watcher (`node --watch`):
 ```bash
 npm run dev
 ```
 
-### 6. Start Production Server
+### 4. Start Production Server
 ```bash
 npm start
 ```
@@ -155,6 +136,64 @@ The local server will receive the event at `POST /api/webhooks/stripe`, verify t
 
 ---
 
-## API Documentation
+## API Endpoints List
 
-For the full specification of all public, customer, vendor, admin, and payment endpoints, see [docs/api.md](docs/api.md).
+### Public Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | Root server status check |
+| `GET` | `/api/health` | Health status ping |
+| `GET` | `/api/categories` | 6 wedding service categories |
+| `GET` | `/api/services` | Service catalog with search, category filter, price filter, sorting & pagination |
+| `GET` | `/api/services/featured` | 6 latest approved and active services |
+| `GET` | `/api/services/:id` | Service detail with sanitized vendor profile |
+
+### Authenticated User Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/me` | Current user profile and database-verified role |
+
+### Customer Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/customer/stats` | Customer booking summary metrics |
+| `POST` | `/api/bookings` | Submit booking request (prevents duplicate active booking & self-booking) |
+| `GET` | `/api/bookings/my` | Customer's booking history with service preview & vendor details |
+| `GET` | `/api/bookings/:id` | Detailed booking information (customer owner or vendor owner) |
+| `PATCH` | `/api/bookings/:id/cancel` | Cancel pending booking (atomic, 409 if status changed) |
+
+### Vendor Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/vendor/stats` | Vendor dashboard statistics (services, bookings, earnings) |
+| `GET` | `/api/vendor/subscription` | Vendor subscription status, expiry, and payment history |
+| `POST` | `/api/vendor/services` | Create new service (pending approval, free-plan limit enforced) |
+| `GET` | `/api/vendor/services` | List all vendor's own services (newest first) |
+| `GET` | `/api/vendor/services/:id` | View single own service |
+| `PATCH` | `/api/vendor/services/:id` | Update editable service details |
+| `PATCH` | `/api/vendor/services/:id/availability` | Toggle availability (`isActive: boolean`) |
+| `DELETE` | `/api/vendor/services/:id` | Delete own service |
+| `GET` | `/api/vendor/bookings` | List bookings for vendor's services |
+| `PATCH` | `/api/vendor/bookings/:id/status` | Accept or reject pending booking |
+
+### Payment & Webhook Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/payments/create-checkout-session` | Generate Stripe Checkout session for Premium upgrade |
+| `GET` | `/api/payments/session-status` | Query session payment status and DB premium state |
+| `POST` | `/api/payments/cancel-subscription` | Cancel subscription at period end |
+| `POST` | `/api/webhooks/stripe` | Raw body endpoint verifying Stripe signature (5 events) |
+
+### Administrator Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/admin/stats` | Platform overview metrics |
+| `GET` | `/api/admin/users` | List users with search, role filters, and pagination |
+| `GET` | `/api/admin/users/:id` | Get single user details with stats |
+| `PATCH` | `/api/admin/users/:id/block` | Block user and revoke active sessions |
+| `PATCH` | `/api/admin/users/:id/unblock` | Unblock user |
+| `GET` | `/api/admin/services` | List all platform services with filters & pagination |
+| `GET` | `/api/admin/services/:id` | Service details with full vendor information |
+| `PATCH` | `/api/admin/services/:id/status` | Approve, reject, or mark service pending |
+| `DELETE` | `/api/admin/services/:id` | Delete inappropriate service |
+| `GET` | `/api/admin/transactions` | Platform payment transactions (strictly READ-ONLY) |
