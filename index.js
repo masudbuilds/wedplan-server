@@ -1416,23 +1416,62 @@ app.get("/api/vendor/subscription", verifyToken, verifyVendor, async (req, res, 
     const usersCollection = getUsersCollection();
     const transactionsCollection = getTransactionsCollection();
 
-    const vendor = await usersCollection.findOne(
-      {
-        $or: [
-          { _id: req.user.id },
-          { id: req.user.id },
-          ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
-        ],
-      },
-      {
-        projection: {
-          subscriptionPlan: 1,
-          subscriptionExpiresAt: 1,
-          cancelAtPeriodEnd: 1,
-          stripeSubscriptionId: 1,
-        },
+    let vendor = await usersCollection.findOne({
+      $or: [
+        { _id: req.user.id },
+        { id: req.user.id },
+        ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+      ],
+    });
+
+    // If vendor is not premium in DB, verify directly with Stripe
+    if (vendor && !isPremium(vendor) && process.env.STRIPE_SECRET_KEY) {
+      try {
+        const stripe = getStripe();
+        let sessionToVerify = null;
+
+        const candidateSessionId = req.query.session_id || vendor.pendingStripeSessionId;
+        if (candidateSessionId) {
+          try {
+            sessionToVerify = await stripe.checkout.sessions.retrieve(candidateSessionId);
+          } catch {
+            // ignore
+          }
+        }
+
+        if (
+          !sessionToVerify ||
+          sessionToVerify.status !== "complete" ||
+          (sessionToVerify.payment_status !== "paid" && sessionToVerify.payment_status !== "no_payment_required")
+        ) {
+          // Look up recent sessions on Stripe matching this vendor
+          const list = await stripe.checkout.sessions.list({ limit: 10 });
+          sessionToVerify = list.data.find(
+            (s) =>
+              (s.metadata?.vendorId === req.user.id ||
+                s.client_reference_id === req.user.id ||
+                s.customer_email === req.user.email) &&
+              s.status === "complete" &&
+              (s.payment_status === "paid" || s.payment_status === "no_payment_required")
+          );
+        }
+
+        if (
+          sessionToVerify &&
+          sessionToVerify.status === "complete" &&
+          (sessionToVerify.payment_status === "paid" || sessionToVerify.payment_status === "no_payment_required")
+        ) {
+          await handleCheckoutSessionCompleted(sessionToVerify);
+          await usersCollection.updateOne(
+            { _id: vendor._id },
+            { $unset: { pendingStripeSessionId: "" } }
+          );
+          vendor = await usersCollection.findOne({ _id: vendor._id });
+        }
+      } catch (checkErr) {
+        console.error("[subscription-verify] Direct Stripe check error:", checkErr.message);
       }
-    );
+    }
 
     const transactions = await transactionsCollection
       .find({ vendorId: req.user.id })
@@ -1952,6 +1991,28 @@ app.post("/api/payments/create-checkout-session", verifyToken, verifyVendor, asy
       url: session.url,
       sessionId: session.id,
     });
+
+    // Record pending session ID for instant verification upon return
+    try {
+      const usersCollection = getUsersCollection();
+      await usersCollection.updateOne(
+        {
+          $or: [
+            { _id: req.user.id },
+            { id: req.user.id },
+            ...(ObjectId.isValid(req.user.id) ? [{ _id: new ObjectId(req.user.id) }] : []),
+          ],
+        },
+        {
+          $set: {
+            pendingStripeSessionId: session.id,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    } catch {
+      // non-critical
+    }
   } catch (error) {
     console.error("[create-checkout-session] failed:", error.message, error.type, error.code);
     next(error);
@@ -1981,7 +2042,7 @@ app.get("/api/payments/session-status", verifyToken, verifyVendor, async (req, r
     }
 
     const usersCollection = getUsersCollection();
-    const vendor = await usersCollection.findOne({
+    let vendor = await usersCollection.findOne({
       $or: [
         { _id: req.user.id },
         { id: req.user.id },
@@ -1989,11 +2050,27 @@ app.get("/api/payments/session-status", verifyToken, verifyVendor, async (req, r
       ],
     });
 
+    // If Stripe confirms payment but vendor in DB is still free, activate immediately
+    if (
+      session.status === "complete" &&
+      (session.payment_status === "paid" || session.payment_status === "no_payment_required") &&
+      vendor &&
+      !isPremium(vendor)
+    ) {
+      await handleCheckoutSessionCompleted(session);
+      await usersCollection.updateOne(
+        { _id: vendor._id },
+        { $unset: { pendingStripeSessionId: "" } }
+      );
+      vendor = await usersCollection.findOne({ _id: vendor._id });
+    }
+
     res.json({
       success: true,
       status: session.status,
       payment_status: session.payment_status,
       isPremium: isPremium(vendor),
+      subscriptionExpiresAt: vendor?.subscriptionExpiresAt || null,
     });
   } catch (error) {
     next(error);
