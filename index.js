@@ -10,13 +10,28 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 // 1. CONSTANTS & SYSTEM DEFINITIONS
 // ============================================================================
 const CATEGORIES = [
-  "Photography",
-  "Videography",
-  "Catering",
-  "Decoration",
-  "Venue",
-  "Bridal Makeup",
+  "Photography & Videography",
+  "Wedding Venues",
+  "Decoration & Florist",
+  "Catering Services",
+  "Makeup & Styling",
+  "Wedding Fashion",
 ];
+
+const LEGACY_CATEGORY_MAP = {
+  Photography: "Photography & Videography",
+  Videography: "Photography & Videography",
+  Venue: "Wedding Venues",
+  Decoration: "Decoration & Florist",
+  Catering: "Catering Services",
+  "Bridal Makeup": "Makeup & Styling",
+};
+
+function normalizeCategory(rawCategory) {
+  if (typeof rawCategory !== "string") return "";
+  const trimmed = rawCategory.trim();
+  return LEGACY_CATEGORY_MAP[trimmed] || trimmed;
+}
 
 const USER_ROLES = {
   CUSTOMER: "customer",
@@ -696,7 +711,8 @@ function validateServiceInput(data, isUpdate = false) {
   }
 
   if (!isUpdate || category !== undefined) {
-    if (!category || !CATEGORIES.includes(category.trim())) {
+    const normalizedCategory = normalizeCategory(category);
+    if (!normalizedCategory || !CATEGORIES.includes(normalizedCategory)) {
       return {
         isValid: false,
         message: `Category must be one of: ${CATEGORIES.join(", ")}.`,
@@ -862,7 +878,7 @@ app.get("/api/services", async (req, res, next) => {
     }
 
     if (category && category.trim()) {
-      query.category = category.trim();
+      query.category = normalizeCategory(category);
     }
 
     if (minPrice !== undefined || maxPrice !== undefined) {
@@ -1657,7 +1673,7 @@ app.post("/api/vendor/services", verifyToken, verifyVendor, async (req, res, nex
     const newService = {
       vendorId: req.user.id,
       serviceName: serviceName.trim(),
-      category: category.trim(),
+      category: normalizeCategory(category),
       description: description.trim(),
       price: Number(price),
       location: location.trim(),
@@ -1776,7 +1792,7 @@ app.patch(
       const { serviceName, category, description, price, location, images } = req.body;
 
       if (serviceName !== undefined) updates.serviceName = serviceName.trim();
-      if (category !== undefined) updates.category = category.trim();
+      if (category !== undefined) updates.category = normalizeCategory(category);
       if (description !== undefined) updates.description = description.trim();
       if (price !== undefined) updates.price = Number(price);
       if (location !== undefined) updates.location = location.trim();
@@ -2554,7 +2570,7 @@ app.get("/api/admin/services", verifyToken, verifyAdmin, async (req, res, next) 
     }
 
     if (category && category.trim()) {
-      query.category = category.trim();
+      query.category = normalizeCategory(category);
     }
 
     if (status && Object.values(SERVICE_STATUS).includes(status.toLowerCase().trim())) {
